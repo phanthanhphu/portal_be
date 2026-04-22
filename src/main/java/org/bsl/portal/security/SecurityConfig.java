@@ -101,13 +101,13 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(List.of(
-                "http://localhost:3000",
-                "http://10.232.132.65:3000",
-                "http://10.232.106.178:3000",
-                "http://10.232.100.68:3000",
-                "http://localhost:8080",
-                "http://127.0.0.1:8080",
-                "http://127.0.0.1:3000"
+                "http://localhost:3001",
+                "http://10.232.132.65:3001",
+                "http://10.232.106.178:3001",
+                "http://10.232.100.68:3001",
+                "http://localhost:8081",
+                "http://127.0.0.1:8081",
+                "http://127.0.0.1:3001"
                 // Nếu deploy production → thêm domain thật, ví dụ: "https://your-frontend.com"
         ));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
