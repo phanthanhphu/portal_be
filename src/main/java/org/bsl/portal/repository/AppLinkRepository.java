@@ -10,13 +10,54 @@ import java.util.List;
 public interface AppLinkRepository extends MongoRepository<AppLink, String> {
 
     boolean existsByName(String name);
-    // Search for AppLinks by name and description (case insensitive)
-    List<AppLink> findByNameContainingIgnoreCaseAndDescContainingIgnoreCase(String name, String desc);
 
-    Page<AppLink> findByNameContainingIgnoreCase(String name, Pageable pageable);
+    // Search for AppLinks by name and description - old method nếu chỗ khác còn dùng
+    List<AppLink> findByNameContainingIgnoreCaseAndDescContainingIgnoreCase(
+            String name,
+            String desc
+    );
 
-    Page<AppLink> findByDescContainingIgnoreCase(String desc, Pageable pageable);
+    Page<AppLink> findByNameContainingIgnoreCase(
+            String name,
+            Pageable pageable
+    );
+
+    Page<AppLink> findByDescContainingIgnoreCase(
+            String desc,
+            Pageable pageable
+    );
 
     Page<AppLink> findByNameContainingIgnoreCaseAndDescContainingIgnoreCase(
-            String name, String desc, Pageable pageable);
+            String name,
+            String desc,
+            Pageable pageable
+    );
+
+    // ===============================
+    // SEARCH WITH DEPARTMENT FILTER
+    // ===============================
+
+    Page<AppLink> findByDepartmentId(
+            String departmentId,
+            Pageable pageable
+    );
+
+    Page<AppLink> findByDepartmentIdAndNameContainingIgnoreCase(
+            String departmentId,
+            String name,
+            Pageable pageable
+    );
+
+    Page<AppLink> findByDepartmentIdAndDescContainingIgnoreCase(
+            String departmentId,
+            String desc,
+            Pageable pageable
+    );
+
+    Page<AppLink> findByDepartmentIdAndNameContainingIgnoreCaseAndDescContainingIgnoreCase(
+            String departmentId,
+            String name,
+            String desc,
+            Pageable pageable
+    );
 }

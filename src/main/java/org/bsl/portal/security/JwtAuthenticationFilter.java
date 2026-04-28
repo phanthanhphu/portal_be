@@ -85,10 +85,26 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 "/index.html".equals(path);
     }
 
+//    @Override
+//    protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
+//        String path = request.getRequestURI();
+//        return path.matches("^/error.*|/actuator.*|/health$");
+//    }
+
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
         String path = request.getRequestURI();
-        return path.matches("^/error.*|/actuator.*|/health$");
+
+        return path.matches("^/error.*|/actuator.*|/health$")
+                || path.equals("/api/app-links/search")
+                || path.equals("/api/departments")
+                || path.equals("/api/forms/search")
+                || path.equals("/api/notices/search")
+                || path.equals("/api/app-links")
+                || path.equals("/api/departments/search")
+                || path.equals("/api/notices")
+                || path.startsWith("/files/")
+                || isStaticResource(path);
     }
 
     // Nếu bạn vẫn muốn trả JSON error đẹp khi 401 (tùy chọn)

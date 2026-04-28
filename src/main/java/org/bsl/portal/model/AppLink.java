@@ -18,6 +18,9 @@ public class AppLink {
     private String desc;
 
     @Indexed
+    private String departmentId;
+
+    @Indexed
     private LocalDateTime createdAt;
 
     @Indexed
@@ -35,6 +38,19 @@ public class AppLink {
         this.url = url;
         this.icon = icon;
         this.desc = desc;
+
+        LocalDateTime now = LocalDateTime.now();
+        this.createdAt = now;
+        this.updatedAt = now;
+    }
+
+    public AppLink(String id, String name, String url, String icon, String desc, String departmentId) {
+        this.id = id;
+        this.name = name;
+        this.url = url;
+        this.icon = icon;
+        this.desc = desc;
+        this.departmentId = departmentId;
 
         LocalDateTime now = LocalDateTime.now();
         this.createdAt = now;
@@ -79,6 +95,14 @@ public class AppLink {
 
     public void setDesc(String desc) {
         this.desc = desc;
+    }
+
+    public String getDepartmentId() {
+        return departmentId;
+    }
+
+    public void setDepartmentId(String departmentId) {
+        this.departmentId = departmentId;
     }
 
     public LocalDateTime getCreatedAt() {

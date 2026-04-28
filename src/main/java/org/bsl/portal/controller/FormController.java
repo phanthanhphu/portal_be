@@ -1,10 +1,14 @@
 package org.bsl.portal.controller;
 
 import org.bsl.portal.dto.FormResponse;
-import org.bsl.portal.model.FormItem;
 import org.bsl.portal.model.Department;
-import org.bsl.portal.service.FormService;
+import org.bsl.portal.model.DocumentType;
+import org.bsl.portal.model.FormItem;
+import org.bsl.portal.model.User;
 import org.bsl.portal.service.DepartmentService;
+import org.bsl.portal.service.DocumentTypeService;
+import org.bsl.portal.service.FormService;
+import org.bsl.portal.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -16,8 +20,11 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.file.*;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/forms")
@@ -29,6 +36,12 @@ public class FormController {
     @Autowired
     private DepartmentService departmentService;
 
+    @Autowired
+    private DocumentTypeService documentTypeService;
+
+    @Autowired
+    private UserService userService;
+
     private final String FILE_DIR = "files/";
 
     // ==================== CREATE FORM ====================
@@ -37,30 +50,44 @@ public class FormController {
             @RequestParam String title,
             @RequestParam(required = false) String description,
             @RequestParam String departmentId,
-            @RequestParam(required = false) MultipartFile file) {
-
+            @RequestParam String typeId,
+            @RequestParam(required = false) MultipartFile file
+    ) {
         try {
-            // Ràng buộc title
             if (title == null || title.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("message", "Title is required and cannot be empty"));
             }
 
-            // Ràng buộc departmentId tồn tại
             if (departmentId == null || departmentId.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("message", "Department ID is required"));
             }
-            Department dept = departmentService.getById(departmentId);
+
+            if (typeId == null || typeId.trim().isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Type ID is required"));
+            }
+
+            Department dept = departmentService.getById(departmentId.trim());
             if (dept == null) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("message", "Department with ID " + departmentId + " does not exist"));
             }
 
-            // Ràng buộc: title không được trùng trong cùng department
-            if (service.existsByTitleAndDepartmentId(title.trim(), departmentId.trim())) {
+            DocumentType type = documentTypeService.getById(typeId.trim());
+            if (type == null) {
                 return ResponseEntity.badRequest()
-                        .body(Map.of("message", "Title '" + title.trim() + "' already exists in this department"));
+                        .body(Map.of("message", "Document type with ID " + typeId + " does not exist"));
+            }
+
+            if (service.existsByTitleAndDepartmentIdAndTypeId(
+                    title.trim(),
+                    departmentId.trim(),
+                    typeId.trim()
+            )) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Title '" + title.trim() + "' already exists in this department and type"));
             }
 
             String fileUrl = null;
@@ -84,9 +111,13 @@ public class FormController {
             item.setTitle(title.trim());
             item.setDescription(description != null ? description.trim() : "");
             item.setDepartmentId(departmentId.trim());
+            item.setTypeId(typeId.trim());
             item.setFileUrl(fileUrl);
-            item.setCreatedAt(LocalDateTime.now());
-            item.setUpdatedAt(LocalDateTime.now());
+            item.setPreviewUrl(fileUrl);
+
+            LocalDateTime now = LocalDateTime.now();
+            item.setCreatedAt(now);
+            item.setUpdatedAt(now);
 
             FormItem created = service.create(item);
 
@@ -105,8 +136,9 @@ public class FormController {
             @RequestParam String title,
             @RequestParam(required = false) String description,
             @RequestParam String departmentId,
-            @RequestParam(required = false) MultipartFile file) {
-
+            @RequestParam String typeId,
+            @RequestParam(required = false) MultipartFile file
+    ) {
         try {
             FormItem existing = service.getById(id);
             if (existing == null) {
@@ -114,41 +146,58 @@ public class FormController {
                         .body(Map.of("message", "Form not found"));
             }
 
-            // Ràng buộc title
             if (title == null || title.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("message", "Title is required and cannot be empty"));
             }
 
-            // Ràng buộc departmentId tồn tại
             if (departmentId == null || departmentId.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("message", "Department ID is required"));
             }
-            Department dept = departmentService.getById(departmentId);
+
+            if (typeId == null || typeId.trim().isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Type ID is required"));
+            }
+
+            Department dept = departmentService.getById(departmentId.trim());
             if (dept == null) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("message", "Department with ID " + departmentId + " does not exist"));
             }
 
-            // Ràng buộc: title không được trùng trong cùng department (loại trừ chính record đang sửa)
-            if (!title.trim().equals(existing.getTitle()) &&
-                    service.existsByTitleAndDepartmentId(title.trim(), departmentId.trim())) {
+            DocumentType type = documentTypeService.getById(typeId.trim());
+            if (type == null) {
                 return ResponseEntity.badRequest()
-                        .body(Map.of("message", "Title '" + title.trim() + "' already exists in this department"));
+                        .body(Map.of("message", "Document type with ID " + typeId + " does not exist"));
             }
 
-            // Cập nhật các trường
-            existing.setTitle(title.trim());
-            existing.setDescription(description != null ? description.trim() : "");
-            existing.setDepartmentId(departmentId.trim());
+            String newTitle = title.trim();
+            String newDepartmentId = departmentId.trim();
+            String newTypeId = typeId.trim();
 
-            // Không cho thay đổi createdAt (giữ nguyên giá trị cũ)
+            boolean titleChanged = !newTitle.equals(existing.getTitle());
+
+            boolean departmentChanged = existing.getDepartmentId() == null
+                    || !newDepartmentId.equals(existing.getDepartmentId());
+
+            boolean typeChanged = existing.getTypeId() == null
+                    || !newTypeId.equals(existing.getTypeId());
+
+            if ((titleChanged || departmentChanged || typeChanged)
+                    && service.existsByTitleAndDepartmentIdAndTypeId(newTitle, newDepartmentId, newTypeId)) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Title '" + newTitle + "' already exists in this department and type"));
+            }
+
+            existing.setTitle(newTitle);
+            existing.setDescription(description != null ? description.trim() : "");
+            existing.setDepartmentId(newDepartmentId);
+            existing.setTypeId(newTypeId);
             existing.setUpdatedAt(LocalDateTime.now());
 
-            // Xử lý file mới (nếu có)
             if (file != null && !file.isEmpty()) {
-                // Xóa file cũ nếu tồn tại
                 if (existing.getFileUrl() != null) {
                     Path oldPath = Paths.get(existing.getFileUrl().replace("/files/", FILE_DIR));
                     Files.deleteIfExists(oldPath);
@@ -166,7 +215,9 @@ public class FormController {
                             .body(Map.of("message", "Failed to save new file: " + e.getMessage()));
                 }
 
-                existing.setFileUrl("/files/" + fileName);
+                String fileUrl = "/files/" + fileName;
+                existing.setFileUrl(fileUrl);
+                existing.setPreviewUrl(fileUrl);
             }
 
             FormItem updated = service.update(id, existing);
@@ -191,6 +242,7 @@ public class FormController {
             }
 
             service.delete(id);
+
             return ResponseEntity.ok(Map.of("message", "Deleted successfully"));
 
         } catch (Exception e) {
@@ -214,10 +266,12 @@ public class FormController {
     @GetMapping("/{id}")
     public ResponseEntity<?> getById(@PathVariable String id) {
         FormItem form = service.getById(id);
+
         if (form == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(Map.of("message", "Form not found"));
         }
+
         return ResponseEntity.ok(form);
     }
 
@@ -228,47 +282,150 @@ public class FormController {
             return ResponseEntity.badRequest()
                     .body(Map.of("message", "DepartmentId is required"));
         }
-        return ResponseEntity.ok(service.getByDepartment(departmentId));
+
+        return ResponseEntity.ok(service.getByDepartment(departmentId.trim()));
     }
 
+    // ==================== GET BY TYPE ====================
+    @GetMapping("/type/{typeId}")
+    public ResponseEntity<?> getByType(@PathVariable String typeId) {
+        if (typeId == null || typeId.trim().isEmpty()) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("message", "TypeId is required"));
+        }
+
+        return ResponseEntity.ok(service.getByTypeId(typeId.trim()));
+    }
+
+    // ==================== SEARCH ====================
     @GetMapping("/search")
     public ResponseEntity<?> search(
+            @RequestParam(required = false) String userId,
+            @RequestParam(defaultValue = "true") boolean skipDepartmentFilter,
             @RequestParam(required = false) String division,
             @RequestParam(required = false) String departmentName,
             @RequestParam(required = false) String title,
             @RequestParam(required = false) String description,
+            @RequestParam(required = false) String typeId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestParam(defaultValue = "createdAt,desc") String sort) {
-
+            @RequestParam(defaultValue = "20") int size
+    ) {
         try {
-            String[] sortParts = sort.split(",");
-            Sort.Direction dir = sortParts.length > 1 && "asc".equalsIgnoreCase(sortParts[1].trim())
-                    ? Sort.Direction.ASC
-                    : Sort.Direction.DESC;
-            String field = sortParts[0].trim();
+            User currentUser = null;
+            boolean admin = false;
+            String currentDepartmentId = null;
+            String filterDepartmentId = null;
 
-            Pageable pageable = PageRequest.of(page, size, Sort.by(dir, field));
+            if (userId != null && !userId.trim().isEmpty()) {
+                Optional<User> userOpt = userService.findById(userId.trim());
+
+                if (userOpt.isEmpty()) {
+                    return ResponseEntity.badRequest()
+                            .body(Map.of("message", "User with ID " + userId + " does not exist"));
+                }
+
+                currentUser = userOpt.get();
+                admin = isAdmin(currentUser);
+                currentDepartmentId = currentUser.getDepartmentId();
+
+                if (!admin && !skipDepartmentFilter) {
+                    if (currentDepartmentId == null || currentDepartmentId.trim().isEmpty()) {
+                        return ResponseEntity.badRequest()
+                                .body(Map.of("message", "User does not belong to any department"));
+                    }
+
+                    filterDepartmentId = currentDepartmentId.trim();
+                }
+            }
+
+            Pageable pageable = PageRequest.of(
+                    page,
+                    size,
+                    Sort.by(Sort.Direction.DESC, "updatedAt")
+                            .and(Sort.by(Sort.Direction.DESC, "createdAt"))
+            );
 
             Page<FormResponse> result = service.search(
+                    filterDepartmentId,
                     division,
                     departmentName,
                     title,
                     description,
+                    typeId,
                     pageable
             );
 
+            List<Map<String, Object>> content = new ArrayList<>();
+
+            for (FormResponse form : result.getContent()) {
+                content.add(toFormResponseMap(form, admin, currentDepartmentId));
+            }
+
             Map<String, Object> response = new HashMap<>();
-            response.put("content", result.getContent());
+            response.put("content", content);
+            response.put("isAdmin", admin);
+            response.put("currentDepartmentId", currentDepartmentId);
+            response.put("skipDepartmentFilter", skipDepartmentFilter);
+            response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
             response.put("totalElements", result.getTotalElements());
             response.put("totalPages", result.getTotalPages());
             response.put("number", result.getNumber());
             response.put("size", result.getSize());
 
             return ResponseEntity.ok(response);
+
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("message", "Failed to search forms: " + e.getMessage()));
         }
+    }
+
+    private Map<String, Object> toFormResponseMap(
+            FormResponse form,
+            boolean admin,
+            String currentDepartmentId
+    ) {
+        Map<String, Object> map = new HashMap<>();
+
+        String formDepartmentId = form.getDepartmentId();
+        boolean canModify = admin || sameDepartment(currentDepartmentId, formDepartmentId);
+
+        map.put("id", form.getId());
+        map.put("departmentId", formDepartmentId);
+        map.put("typeId", form.getTypeId());
+        map.put("departmentName", form.getDepartmentName());
+        map.put("division", form.getDivision());
+        map.put("title", form.getTitle());
+        map.put("description", form.getDescription());
+        map.put("fileType", form.getFileType());
+        map.put("fileUrl", form.getFileUrl());
+        map.put("previewUrl", form.getPreviewUrl());
+        map.put("createdAt", form.getCreatedAt());
+        map.put("updatedAt", form.getUpdatedAt());
+
+        map.put("canEdit", canModify);
+        map.put("canDelete", canModify);
+
+        return map;
+    }
+
+    private boolean sameDepartment(String currentDepartmentId, String itemDepartmentId) {
+        if (currentDepartmentId == null || itemDepartmentId == null) {
+            return false;
+        }
+
+        return currentDepartmentId.trim().equals(itemDepartmentId.trim());
+    }
+
+    private boolean isAdmin(User user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
+
+        String role = user.getRole().trim();
+
+        return "Admin".equalsIgnoreCase(role)
+                || "ADMIN".equalsIgnoreCase(role)
+                || "ROLE_ADMIN".equalsIgnoreCase(role);
     }
 }

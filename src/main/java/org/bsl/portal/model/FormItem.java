@@ -14,6 +14,8 @@ public class FormItem {
 
     private String departmentId; // liên kết phòng ban
 
+    private String typeId; // liên kết loại document: Form, Quy định, Thông báo...
+
     private String title;
     private String description;
     private FileType fileType;
@@ -30,10 +32,17 @@ public class FormItem {
         this.updatedAt = now;
     }
 
-    public FormItem(String departmentId, String title, String description,
-                    FileType fileType, String fileUrl, String previewUrl) {
-
+    public FormItem(
+            String departmentId,
+            String typeId,
+            String title,
+            String description,
+            FileType fileType,
+            String fileUrl,
+            String previewUrl
+    ) {
         this.departmentId = departmentId;
+        this.typeId = typeId;
         this.title = title;
         this.description = description;
         this.fileType = fileType;
@@ -53,12 +62,8 @@ public class FormItem {
         return departmentId;
     }
 
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public void setDepartmentId(String departmentId) {
-        this.departmentId = departmentId;
+    public String getTypeId() {
+        return typeId;
     }
 
     public String getTitle() {
@@ -87,6 +92,18 @@ public class FormItem {
 
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public void setDepartmentId(String departmentId) {
+        this.departmentId = departmentId;
+    }
+
+    public void setTypeId(String typeId) {
+        this.typeId = typeId;
     }
 
     public void setTitle(String title) {

@@ -87,46 +87,23 @@ public class NoticeService {
     }
 
     public Page<NoticeResponse> search(
+            String departmentId,
             String division,
             String departmentName,
             String title,
             String content,
             Pageable pageable
     ) {
-        List<Department> matchedDepartments = departmentService.search(
+        Query query = buildSearchQuery(
+                departmentId,
                 division,
                 departmentName,
-                0,
-                1000
+                title,
+                content
         );
 
-        List<String> departmentIds = matchedDepartments.stream()
-                .map(Department::getId)
-                .filter(StringUtils::hasText)
-                .collect(Collectors.toList());
-
-        Query query = new Query();
-        List<Criteria> andCriterias = new ArrayList<>();
-
-        if (StringUtils.hasText(title)) {
-            andCriterias.add(Criteria.where("title").regex(title.trim(), "i"));
-        }
-
-        if (StringUtils.hasText(content)) {
-            andCriterias.add(Criteria.where("content").regex(content.trim(), "i"));
-        }
-
-        if (StringUtils.hasText(division) || StringUtils.hasText(departmentName)) {
-            if (departmentIds.isEmpty()) {
-                return Page.empty(pageable);
-            }
-            andCriterias.add(Criteria.where("departmentId").in(departmentIds));
-        }
-
-        if (!andCriterias.isEmpty()) {
-            query.addCriteria(new Criteria().andOperator(
-                    andCriterias.toArray(new Criteria[0])
-            ));
+        if (query == null) {
+            return Page.empty(pageable);
         }
 
         long total = mongoTemplate.count(query, Notice.class);
@@ -136,31 +113,174 @@ public class NoticeService {
                 Notice.class
         );
 
-        List<NoticeResponse> contentList = notices.stream().map(notice -> {
-            NoticeResponse response = new NoticeResponse();
-            response.setId(notice.getId());
-            response.setTitle(notice.getTitle());
-            response.setContent(notice.getContent());
-            response.setFileUrl(notice.getFileUrl());
-            response.setPinned(notice.getPinned());
-            response.setUserId(notice.getUserId());
-            response.setDepartmentId(notice.getDepartmentId());
-            response.setCreatedAt(notice.getCreatedAt());
-            response.setUpdatedAt(notice.getUpdatedAt());
-
-            if (StringUtils.hasText(notice.getDepartmentId())) {
-                Department dept = departmentService.getById(notice.getDepartmentId());
-                if (dept != null) {
-                    response.setDepartmentName(dept.getDepartmentName());
-                    response.setDivision(dept.getDivision());
-                }
-            }
-
-            return response;
-        }).collect(Collectors.toList());
+        List<NoticeResponse> contentList = notices.stream()
+                .map(this::toNoticeResponse)
+                .collect(Collectors.toList());
 
         return new PageImpl<>(contentList, pageable, total);
     }
+
+    public NoticeResponse getLatestPinnedNotice(
+            String departmentId,
+            String division,
+            String departmentName,
+            String title,
+            String content
+    ) {
+        Query query = buildSearchQuery(
+                departmentId,
+                division,
+                departmentName,
+                title,
+                content
+        );
+
+        if (query == null) {
+            return null;
+        }
+
+        query.addCriteria(Criteria.where("pinned").is(true));
+        query.with(
+                Sort.by(Sort.Direction.DESC, "updatedAt")
+                        .and(Sort.by(Sort.Direction.DESC, "createdAt"))
+        );
+        query.limit(1);
+
+        Notice notice = mongoTemplate.findOne(query, Notice.class);
+
+        return notice == null ? null : toNoticeResponse(notice);
+    }
+
+    public Page<NoticeResponse> searchExcludingNoticeId(
+            String departmentId,
+            String division,
+            String departmentName,
+            String title,
+            String content,
+            String excludeNoticeId,
+            Pageable pageable
+    ) {
+        Query query = buildSearchQuery(
+                departmentId,
+                division,
+                departmentName,
+                title,
+                content
+        );
+
+        if (query == null) {
+            return Page.empty(pageable);
+        }
+
+        if (StringUtils.hasText(excludeNoticeId)) {
+            query.addCriteria(Criteria.where("_id").ne(excludeNoticeId.trim()));
+        }
+
+        long total = mongoTemplate.count(query, Notice.class);
+
+        List<Notice> notices = mongoTemplate.find(
+                query.with(pageable),
+                Notice.class
+        );
+
+        List<NoticeResponse> contentList = notices.stream()
+                .map(this::toNoticeResponse)
+                .collect(Collectors.toList());
+
+        return new PageImpl<>(contentList, pageable, total);
+    }
+
+    private Query buildSearchQuery(
+            String departmentId,
+            String division,
+            String departmentName,
+            String title,
+            String content
+    ) {
+        List<String> effectiveDepartmentIds = null;
+
+        if (StringUtils.hasText(division) || StringUtils.hasText(departmentName)) {
+            List<Department> matchedDepartments = departmentService.search(
+                    division,
+                    departmentName,
+                    0,
+                    1000
+            );
+
+            effectiveDepartmentIds = matchedDepartments.stream()
+                    .map(Department::getId)
+                    .filter(StringUtils::hasText)
+                    .collect(Collectors.toList());
+
+            if (effectiveDepartmentIds.isEmpty()) {
+                return null;
+            }
+        }
+
+        if (StringUtils.hasText(departmentId)) {
+            String normalizedDepartmentId = departmentId.trim();
+            Department department = departmentService.getById(normalizedDepartmentId);
+
+            if (department == null) {
+                return null;
+            }
+
+            if (effectiveDepartmentIds != null && !effectiveDepartmentIds.contains(normalizedDepartmentId)) {
+                return null;
+            }
+
+            effectiveDepartmentIds = List.of(normalizedDepartmentId);
+        }
+
+        Query query = new Query();
+        List<Criteria> andCriterias = new ArrayList<>();
+
+        if (effectiveDepartmentIds != null && !effectiveDepartmentIds.isEmpty()) {
+            andCriterias.add(Criteria.where("departmentId").in(effectiveDepartmentIds));
+        }
+
+        if (StringUtils.hasText(title)) {
+            andCriterias.add(Criteria.where("title").regex(title.trim(), "i"));
+        }
+
+        if (StringUtils.hasText(content)) {
+            andCriterias.add(Criteria.where("content").regex(content.trim(), "i"));
+        }
+
+        if (!andCriterias.isEmpty()) {
+            query.addCriteria(new Criteria().andOperator(
+                    andCriterias.toArray(new Criteria[0])
+            ));
+        }
+
+        return query;
+    }
+
+    private NoticeResponse toNoticeResponse(Notice notice) {
+        NoticeResponse response = new NoticeResponse();
+
+        response.setId(notice.getId());
+        response.setTitle(notice.getTitle());
+        response.setContent(notice.getContent());
+        response.setFileUrl(notice.getFileUrl());
+        response.setPinned(notice.getPinned());
+        response.setUserId(notice.getUserId());
+        response.setDepartmentId(notice.getDepartmentId());
+        response.setCreatedAt(notice.getCreatedAt());
+        response.setUpdatedAt(notice.getUpdatedAt());
+
+        if (StringUtils.hasText(notice.getDepartmentId())) {
+            Department dept = departmentService.getById(notice.getDepartmentId());
+
+            if (dept != null) {
+                response.setDepartmentName(dept.getDepartmentName());
+                response.setDivision(dept.getDivision());
+            }
+        }
+
+        return response;
+    }
+
 
     // PIN / UNPIN
     public Notice pin(String id, Boolean pinned) {

@@ -5,13 +5,13 @@ import org.bsl.portal.model.Department;
 import org.bsl.portal.model.FormItem;
 import org.bsl.portal.repository.FormRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.PageImpl;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -37,9 +37,13 @@ public class FormService {
         return repository.existsByTitleAndDepartmentId(title, departmentId);
     }
 
+    // ==================== CHECK TITLE TRÙNG TRONG CÙNG DEPARTMENT + TYPE ====================
+    public boolean existsByTitleAndDepartmentIdAndTypeId(String title, String departmentId, String typeId) {
+        return repository.existsByTitleAndDepartmentIdAndTypeId(title, departmentId, typeId);
+    }
+
     // ==================== CREATE ====================
     public FormItem create(FormItem item) {
-        // Nếu id chưa có thì tạo mới
         if (item.getId() == null || item.getId().isEmpty()) {
             item.setId(UUID.randomUUID().toString());
         }
@@ -61,12 +65,11 @@ public class FormService {
 
         FormItem existing = optional.get();
 
-        // Cập nhật các trường cơ bản
         existing.setTitle(newItem.getTitle());
         existing.setDescription(newItem.getDescription());
         existing.setDepartmentId(newItem.getDepartmentId());
+        existing.setTypeId(newItem.getTypeId());
 
-        // Chỉ cập nhật fileUrl nếu có file mới được upload
         if (newItem.getFileUrl() != null && !newItem.getFileUrl().isEmpty()) {
             existing.setFileUrl(newItem.getFileUrl());
             existing.setFileType(newItem.getFileType());
@@ -88,24 +91,17 @@ public class FormService {
         return repository.findByDepartmentId(departmentId);
     }
 
+    // ==================== GET BY TYPE ====================
+    public List<FormItem> getByTypeId(String typeId) {
+        return repository.findByTypeId(typeId);
+    }
+
     // ==================== GET ALL ====================
     public List<FormResponse> getAll() {
         return repository.findAll().stream().map(form -> {
             Department dept = departmentService.getById(form.getDepartmentId());
 
-            return new FormResponse(
-                    form.getId(),
-                    form.getTitle(),
-                    form.getDescription(),
-                    form.getFileType(),
-                    form.getFileUrl(),
-                    form.getPreviewUrl(),
-                    form.getDepartmentId(),
-                    dept != null ? dept.getDepartmentName() : null,
-                    dept != null ? dept.getDivision() : null,
-                    form.getCreatedAt(),
-                    form.getUpdatedAt()
-            );
+            return toFormResponse(form, dept);
         }).collect(Collectors.toList());
     }
 
@@ -114,18 +110,22 @@ public class FormService {
         repository.deleteById(id);
     }
 
-
+    // ==================== SEARCH ====================
     public Page<FormResponse> search(
+            String departmentId,
             String division,
             String departmentName,
             String title,
             String description,
-            Pageable pageable) {
-
+            String typeId,
+            Pageable pageable
+    ) {
+        String normalizedDepartmentId = normalize(departmentId);
         String normalizedDivision = normalize(division);
         String normalizedDepartmentName = normalize(departmentName);
         String normalizedTitle = normalize(title);
         String normalizedDescription = normalize(description);
+        String normalizedTypeId = normalize(typeId);
 
         List<String> effectiveDeptIds = null;
 
@@ -144,10 +144,28 @@ public class FormService {
                     .collect(Collectors.toList());
         }
 
+        if (normalizedDepartmentId != null) {
+            Department dept = departmentService.getById(normalizedDepartmentId);
+
+            if (dept == null) {
+                return new PageImpl<>(List.of(), pageable, 0);
+            }
+
+            if (effectiveDeptIds != null && !effectiveDeptIds.contains(normalizedDepartmentId)) {
+                return new PageImpl<>(List.of(), pageable, 0);
+            }
+
+            effectiveDeptIds = List.of(normalizedDepartmentId);
+        }
+
         List<Criteria> criteriaList = new ArrayList<>();
 
         if (effectiveDeptIds != null && !effectiveDeptIds.isEmpty()) {
             criteriaList.add(Criteria.where("departmentId").in(effectiveDeptIds));
+        }
+
+        if (normalizedTypeId != null) {
+            criteriaList.add(Criteria.where("typeId").is(normalizedTypeId));
         }
 
         if (normalizedTitle != null) {
@@ -159,45 +177,60 @@ public class FormService {
         }
 
         Query query = new Query();
+
         if (!criteriaList.isEmpty()) {
             query.addCriteria(new Criteria().andOperator(criteriaList.toArray(new Criteria[0])));
         }
 
         long total = mongoTemplate.count(query, FormItem.class);
+
         query.with(pageable);
 
         List<FormItem> forms = mongoTemplate.find(query, FormItem.class);
 
         List<FormResponse> content = forms.stream().map(form -> {
             Department dept = departmentService.getById(form.getDepartmentId());
-            return new FormResponse(
-                    form.getId(),
-                    form.getTitle(),
-                    form.getDescription(),
-                    form.getFileType(),
-                    form.getFileUrl(),
-                    form.getPreviewUrl(),
-                    form.getDepartmentId(),
-                    dept != null ? dept.getDepartmentName() : null,
-                    dept != null ? dept.getDivision() : null,
-                    form.getCreatedAt(),
-                    form.getUpdatedAt()
-            );
+
+            return toFormResponse(form, dept);
         }).collect(Collectors.toList());
 
         return new PageImpl<>(content, pageable, total);
+    }
+
+    private FormResponse toFormResponse(FormItem form, Department dept) {
+        return new FormResponse(
+                form.getId(),
+                form.getTitle(),
+                form.getDescription(),
+                form.getTypeId(),
+                form.getFileType(),
+                form.getFileUrl(),
+                form.getPreviewUrl(),
+                form.getDepartmentId(),
+                dept != null ? dept.getDepartmentName() : null,
+                dept != null ? dept.getDivision() : null,
+                form.getCreatedAt(),
+                form.getUpdatedAt()
+        );
     }
 
     private String normalize(String value) {
         if (value == null || value.trim().isEmpty()) {
             return null;
         }
+
         return value.trim();
     }
 
     private boolean containsIgnoreCase(String source, String keyword) {
-        if (keyword == null) return true;
-        if (source == null) return false;
+        if (keyword == null) {
+            return true;
+        }
+
+        if (source == null) {
+            return false;
+        }
+
         return source.toLowerCase().contains(keyword.toLowerCase());
     }
 }

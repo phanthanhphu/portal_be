@@ -1,13 +1,18 @@
 package org.bsl.portal.controller;
 
 import org.bsl.portal.model.Department;
+import org.bsl.portal.model.User;
 import org.bsl.portal.service.DepartmentService;
+import org.bsl.portal.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/departments")
@@ -15,6 +20,9 @@ public class DepartmentController {
 
     @Autowired
     private DepartmentService service;
+
+    @Autowired
+    private UserService userService;
 
     /*
     ===============================
@@ -28,7 +36,6 @@ public class DepartmentController {
     ) {
         try {
 
-            // validate
             if (division == null || division.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("status", 400, "message", "Division is required"));
@@ -60,7 +67,9 @@ public class DepartmentController {
     */
     @GetMapping
     public ResponseEntity<?> getAll() {
-        return ResponseEntity.ok(service.getAll());
+        List<Department> departments = service.getAll();
+
+        return ResponseEntity.ok(sortDepartmentsByUpdatedAtDesc(departments));
     }
 
     /*
@@ -97,7 +106,6 @@ public class DepartmentController {
     ) {
         try {
 
-            // validate
             if (division == null || division.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("status", 400, "message", "Division is required"));
@@ -156,12 +164,140 @@ public class DepartmentController {
         }
     }
 
+    /*
+    ===============================
+    SEARCH BY USER
+    ===============================
+    */
     @GetMapping("/search")
     public ResponseEntity<?> filter(
+            @RequestParam(required = false) String userId,
             @RequestParam(required = false) String division,
-            @RequestParam(required = false) String departmentName
+            @RequestParam(required = false) String departmentName,
+            @RequestParam(defaultValue = "false") boolean skipDepartmentFilter
     ) {
-        List<Department> departments = service.getAll(division, departmentName);
-        return ResponseEntity.ok(departments);
+        try {
+            if (userId == null || userId.trim().isEmpty()) {
+                List<Department> departments = service.getAll(division, departmentName);
+
+                return ResponseEntity.ok(Map.of(
+                        "isAdmin", false,
+                        "skipDepartmentFilter", skipDepartmentFilter,
+                        "disableDepartmentSearch", true,
+                        "departments", sortDepartmentsByUpdatedAtDesc(departments)
+                ));
+            }
+
+            Optional<User> userOpt = userService.findById(userId.trim());
+
+            if (userOpt.isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of(
+                                "status", 400,
+                                "message", "User with ID " + userId + " does not exist"
+                        ));
+            }
+
+            User user = userOpt.get();
+
+            if (isAdmin(user)) {
+                List<Department> departments = service.getAll(division, departmentName);
+
+                return ResponseEntity.ok(Map.of(
+                        "isAdmin", true,
+                        "skipDepartmentFilter", true,
+                        "disableDepartmentSearch", false,
+                        "departments", sortDepartmentsByUpdatedAtDesc(departments)
+                ));
+            }
+
+            /*
+             * User thường nhưng muốn BỎ QUA filter theo phòng ban user.
+             * Khi skipDepartmentFilter = true:
+             * - Không ép user.departmentId
+             * - Cho search theo division / departmentName bình thường
+             */
+            if (skipDepartmentFilter) {
+                List<Department> departments = service.getAll(division, departmentName);
+
+                return ResponseEntity.ok(Map.of(
+                        "isAdmin", false,
+                        "skipDepartmentFilter", true,
+                        "disableDepartmentSearch", false,
+                        "departments", sortDepartmentsByUpdatedAtDesc(departments)
+                ));
+            }
+
+            /*
+             * User thường và KHÔNG bỏ qua filter phòng ban.
+             * Chỉ trả về phòng ban chính của user.
+             */
+            String departmentId = user.getDepartmentId();
+
+            if (departmentId == null || departmentId.trim().isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of(
+                                "status", 400,
+                                "message", "User does not belong to any department"
+                        ));
+            }
+
+            Department department = service.getById(departmentId.trim());
+
+            if (department == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of(
+                                "status", 404,
+                                "message", "Department not found"
+                        ));
+            }
+
+            return ResponseEntity.ok(Map.of(
+                    "isAdmin", false,
+                    "skipDepartmentFilter", false,
+                    "disableDepartmentSearch", true,
+                    "departments", List.of(department)
+            ));
+
+        } catch (Exception ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "status", 500,
+                            "message", "Failed to search departments: " + ex.getMessage()
+                    ));
+        }
+    }
+
+
+    private List<Department> sortDepartmentsByUpdatedAtDesc(List<Department> departments) {
+        if (departments == null || departments.isEmpty()) {
+            return departments;
+        }
+
+        departments.sort(
+                Comparator.comparing(
+                        Department::getUpdatedAt,
+                        Comparator.nullsLast(LocalDateTime::compareTo)
+                )
+                        .thenComparing(
+                                Department::getCreatedAt,
+                                Comparator.nullsLast(LocalDateTime::compareTo)
+                        )
+                        .reversed()
+        );
+
+        return departments;
+    }
+
+    private boolean isAdmin(User user) {
+        if (user.getRole() == null) {
+            return false;
+        }
+
+        String role = user.getRole().trim();
+
+        return "Admin".equalsIgnoreCase(role)
+                || "ADMIN".equalsIgnoreCase(role)
+                || "ROLE_ADMIN".equalsIgnoreCase(role);
     }
 }

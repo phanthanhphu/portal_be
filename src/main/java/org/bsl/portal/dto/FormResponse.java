@@ -10,8 +10,9 @@ public class FormResponse {
     private String title;
     private String description;
 
-    private FileType fileType;
+    private String typeId;
 
+    private FileType fileType;
     private String fileUrl;
     private String previewUrl;
 
@@ -22,15 +23,14 @@ public class FormResponse {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    // ===== Constructor rỗng =====
     public FormResponse() {
     }
 
-    // ===== Constructor đầy đủ =====
     public FormResponse(
             String id,
             String title,
             String description,
+            String typeId,
             FileType fileType,
             String fileUrl,
             String previewUrl,
@@ -43,6 +43,7 @@ public class FormResponse {
         this.id = id;
         this.title = title;
         this.description = description;
+        this.typeId = typeId;
         this.fileType = fileType;
         this.fileUrl = fileUrl;
         this.previewUrl = previewUrl;
@@ -53,90 +54,96 @@ public class FormResponse {
         this.updatedAt = updatedAt;
     }
 
-    // ===== Getter & Setter =====
-
     public String getId() {
         return id;
-    }
-
-    public void setId(String id) {
-        this.id = id;
     }
 
     public String getTitle() {
         return title;
     }
 
-    public void setTitle(String title) {
-        this.title = title;
-    }
-
     public String getDescription() {
         return description;
     }
 
-    public void setDescription(String description) {
-        this.description = description;
+    public String getTypeId() {
+        return typeId;
     }
 
     public FileType getFileType() {
         return fileType;
     }
 
-    public void setFileType(FileType fileType) {
-        this.fileType = fileType;
-    }
-
     public String getFileUrl() {
         return fileUrl;
-    }
-
-    public void setFileUrl(String fileUrl) {
-        this.fileUrl = fileUrl;
     }
 
     public String getPreviewUrl() {
         return previewUrl;
     }
 
-    public void setPreviewUrl(String previewUrl) {
-        this.previewUrl = previewUrl;
-    }
-
     public String getDepartmentId() {
         return departmentId;
-    }
-
-    public void setDepartmentId(String departmentId) {
-        this.departmentId = departmentId;
     }
 
     public String getDepartmentName() {
         return departmentName;
     }
 
-    public void setDepartmentName(String departmentName) {
-        this.departmentName = departmentName;
-    }
-
     public String getDivision() {
         return division;
-    }
-
-    public void setDivision(String division) {
-        this.division = division;
     }
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
 
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public void setTypeId(String typeId) {
+        this.typeId = typeId;
+    }
+
+    public void setFileType(FileType fileType) {
+        this.fileType = fileType;
+    }
+
+    public void setFileUrl(String fileUrl) {
+        this.fileUrl = fileUrl;
+    }
+
+    public void setPreviewUrl(String previewUrl) {
+        this.previewUrl = previewUrl;
+    }
+
+    public void setDepartmentId(String departmentId) {
+        this.departmentId = departmentId;
+    }
+
+    public void setDepartmentName(String departmentName) {
+        this.departmentName = departmentName;
+    }
+
+    public void setDivision(String division) {
+        this.division = division;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
     }
 
     public void setUpdatedAt(LocalDateTime updatedAt) {

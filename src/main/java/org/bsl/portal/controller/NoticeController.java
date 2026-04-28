@@ -3,8 +3,10 @@ package org.bsl.portal.controller;
 import org.bsl.portal.dto.NoticeResponse;
 import org.bsl.portal.model.Department;
 import org.bsl.portal.model.Notice;
+import org.bsl.portal.model.User;
 import org.bsl.portal.service.DepartmentService;
 import org.bsl.portal.service.NoticeService;
+import org.bsl.portal.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -14,10 +16,16 @@ import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.beans.Introspector;
+import java.beans.PropertyDescriptor;
+import java.lang.reflect.Method;
 import java.nio.file.*;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/notices")
@@ -29,6 +37,9 @@ public class NoticeController {
     @Autowired
     private DepartmentService departmentService;
 
+    @Autowired
+    private UserService userService;
+
     private final String FILE_DIR = "files/";
 
     // CREATE NOTICE
@@ -37,7 +48,7 @@ public class NoticeController {
             @RequestParam String title,
             @RequestParam String content,
             @RequestParam String userId,
-            @RequestParam String departmentId,
+            @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) Boolean pinned,
             @RequestParam(required = false) MultipartFile file) {
 
@@ -48,15 +59,26 @@ public class NoticeController {
                         .body(Map.of("message", "Title is required"));
             }
 
-            if (departmentId == null || departmentId.trim().isEmpty()) {
+            User user = getUserOrNull(userId);
+
+            if (user == null) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+            }
+
+            boolean admin = isAdmin(user);
+
+            String effectiveDepartmentId = resolveDepartmentIdForCreateOrUpdate(user, admin, departmentId);
+
+            if (effectiveDepartmentId == null || effectiveDepartmentId.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("message", "Department ID is required"));
             }
 
-            Department dept = departmentService.getById(departmentId.trim());
+            Department dept = departmentService.getById(effectiveDepartmentId.trim());
             if (dept == null) {
                 return ResponseEntity.badRequest()
-                        .body(Map.of("message", "Department with ID " + departmentId + " does not exist"));
+                        .body(Map.of("message", "Department with ID " + effectiveDepartmentId + " does not exist"));
             }
 
             String fileUrl = null;
@@ -78,12 +100,14 @@ public class NoticeController {
 
             notice.setTitle(title.trim());
             notice.setContent(content != null ? content.trim() : "");
-            notice.setUserId(userId);
-            notice.setDepartmentId(departmentId.trim());
+            notice.setUserId(userId.trim());
+            notice.setDepartmentId(effectiveDepartmentId.trim());
             notice.setPinned(pinned != null ? pinned : false);
             notice.setFileUrl(fileUrl);
-            notice.setCreatedAt(LocalDateTime.now());
-            notice.setUpdatedAt(LocalDateTime.now());
+
+            LocalDateTime now = LocalDateTime.now();
+            notice.setCreatedAt(now);
+            notice.setUpdatedAt(now);
 
             Notice created = noticeService.create(notice);
 
@@ -102,7 +126,8 @@ public class NoticeController {
             @PathVariable String id,
             @RequestParam String title,
             @RequestParam String content,
-            @RequestParam String departmentId,
+            @RequestParam(required = false) String userId,
+            @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) Boolean pinned,
             @RequestParam(required = false) MultipartFile file) {
 
@@ -120,21 +145,54 @@ public class NoticeController {
                         .body(Map.of("message", "Title is required"));
             }
 
-            if (departmentId == null || departmentId.trim().isEmpty()) {
+            User user = null;
+            boolean admin = false;
+
+            if (userId != null && !userId.trim().isEmpty()) {
+                user = getUserOrNull(userId.trim());
+
+                if (user == null) {
+                    return ResponseEntity.badRequest()
+                            .body(Map.of("message", "User with ID " + userId + " does not exist"));
+                }
+
+                admin = isAdmin(user);
+
+                if (!canModifyNotice(user, admin, existing)) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(Map.of("message", "You do not have permission to update this notice"));
+                }
+            }
+
+            String effectiveDepartmentId;
+
+            if (user != null) {
+                if (admin) {
+                    effectiveDepartmentId = departmentId != null && !departmentId.trim().isEmpty()
+                            ? departmentId.trim()
+                            : existing.getDepartmentId();
+                } else {
+                    effectiveDepartmentId = user.getDepartmentId();
+                }
+            } else {
+                effectiveDepartmentId = departmentId;
+            }
+
+            if (effectiveDepartmentId == null || effectiveDepartmentId.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(Map.of("message", "Department ID is required"));
             }
 
-            Department dept = departmentService.getById(departmentId.trim());
+            Department dept = departmentService.getById(effectiveDepartmentId.trim());
             if (dept == null) {
                 return ResponseEntity.badRequest()
-                        .body(Map.of("message", "Department with ID " + departmentId + " does not exist"));
+                        .body(Map.of("message", "Department with ID " + effectiveDepartmentId + " does not exist"));
             }
 
             existing.setTitle(title.trim());
             existing.setContent(content != null ? content.trim() : "");
-            existing.setDepartmentId(departmentId.trim());
-            existing.setPinned(pinned != null ? pinned : false);
+            existing.setDepartmentId(effectiveDepartmentId.trim());
+            existing.setPinned(pinned != null ? pinned : Boolean.TRUE.equals(existing.getPinned()));
 
             if (file != null && !file.isEmpty()) {
 
@@ -169,7 +227,9 @@ public class NoticeController {
 
     // DELETE NOTICE
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> delete(@PathVariable String id) {
+    public ResponseEntity<?> delete(
+            @PathVariable String id,
+            @RequestParam(required = false) String userId) {
 
         Notice existing = noticeService.getById(id);
 
@@ -179,6 +239,22 @@ public class NoticeController {
         }
 
         try {
+
+            if (userId != null && !userId.trim().isEmpty()) {
+                User user = getUserOrNull(userId.trim());
+
+                if (user == null) {
+                    return ResponseEntity.badRequest()
+                            .body(Map.of("message", "User with ID " + userId + " does not exist"));
+                }
+
+                boolean admin = isAdmin(user);
+
+                if (!canModifyNotice(user, admin, existing)) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(Map.of("message", "You do not have permission to delete this notice"));
+                }
+            }
 
             if (existing.getFileUrl() != null) {
 
@@ -229,54 +305,282 @@ public class NoticeController {
             @PathVariable String id,
             @RequestParam Boolean pinned) {
 
-        Notice notice = noticeService.pin(id, pinned);
+        Notice notice = noticeService.getById(id);
 
         if (notice == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(Map.of("message", "Notice not found"));
         }
 
-        return ResponseEntity.ok(notice);
+        notice.setPinned(Boolean.TRUE.equals(pinned));
+        notice.setUpdatedAt(LocalDateTime.now());
+
+        Notice updated = noticeService.update(id, notice);
+
+        return ResponseEntity.ok(updated);
     }
 
     @GetMapping("/search")
     public ResponseEntity<?> search(
+            @RequestParam(required = false) String userId,
+            @RequestParam(defaultValue = "true") boolean skipDepartmentFilter,
+            @RequestParam(defaultValue = "false") boolean includeFeaturedPinned,
             @RequestParam(required = false) String division,
             @RequestParam(required = false) String departmentName,
             @RequestParam(required = false) String title,
             @RequestParam(required = false) String content,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestParam(defaultValue = "createdAt,desc") String sort) {
+            @RequestParam(defaultValue = "20") int size) {
 
         try {
-            String[] sortParts = sort.split(",");
-            Sort.Direction dir = sortParts.length > 1 && "asc".equalsIgnoreCase(sortParts[1].trim())
-                    ? Sort.Direction.ASC
-                    : Sort.Direction.DESC;
-            String field = sortParts[0].trim();
+            boolean admin = false;
+            String currentDepartmentId = null;
+            String filterDepartmentId = null;
 
-            Pageable pageable = PageRequest.of(page, size, Sort.by(dir, field));
+            if (userId != null && !userId.trim().isEmpty()) {
+                Optional<User> userOpt = userService.findById(userId.trim());
 
-            Page<NoticeResponse> result = noticeService.search(
-                    division,
-                    departmentName,
-                    title,
-                    content,
-                    pageable
-            );
+                if (userOpt.isEmpty()) {
+                    return ResponseEntity.badRequest()
+                            .body(Map.of("message", "User with ID " + userId + " does not exist"));
+                }
+
+                User user = userOpt.get();
+                admin = isAdmin(user);
+                currentDepartmentId = user.getDepartmentId();
+
+                if (!admin && !skipDepartmentFilter) {
+                    filterDepartmentId = currentDepartmentId;
+
+                    if (filterDepartmentId == null || filterDepartmentId.trim().isEmpty()) {
+                        return ResponseEntity.badRequest()
+                                .body(Map.of("message", "User does not belong to any department"));
+                    }
+                }
+            }
+
+            Sort newestSort = Sort.by(Sort.Direction.DESC, "updatedAt")
+                    .and(Sort.by(Sort.Direction.DESC, "createdAt"));
+
+            Map<String, Object> featuredPinnedNotice = null;
+            String featuredPinnedNoticeId = null;
+
+            if (includeFeaturedPinned) {
+                Pageable featuredPageable = PageRequest.of(
+                        0,
+                        1,
+                        Sort.by(Sort.Direction.DESC, "pinned").and(newestSort)
+                );
+
+                Page<NoticeResponse> featuredResult = noticeService.search(
+                        filterDepartmentId,
+                        division,
+                        departmentName,
+                        title,
+                        content,
+                        featuredPageable
+                );
+
+                if (!featuredResult.getContent().isEmpty()) {
+                    Map<String, Object> candidate = toNoticeResponseMap(
+                            featuredResult.getContent().get(0),
+                            admin,
+                            currentDepartmentId
+                    );
+
+                    if (Boolean.TRUE.equals(candidate.get("pinned"))) {
+                        featuredPinnedNotice = candidate;
+                        featuredPinnedNoticeId = getStringValue(candidate.get("id"));
+                    }
+                }
+            }
+
+            Page<NoticeResponse> result;
+            ArrayList<Map<String, Object>> responseContent = new ArrayList<>();
+            long totalElements;
+            int totalPages;
+
+            if (includeFeaturedPinned && featuredPinnedNoticeId != null) {
+                int safePage = Math.max(page, 0);
+                int safeSize = Math.max(size, 1);
+
+                /*
+                 * We need content page to exclude featuredPinnedNotice.
+                 * Because NoticeService.search does not receive an exclude-id parameter,
+                 * fetch enough newest records from the beginning, remove the featured item,
+                 * then slice the requested page in memory.
+                 *
+                 * PageHome uses page=0 and size=30, so this returns:
+                 * - 1 featuredPinnedNotice
+                 * - 30 newest notices in content, excluding featuredPinnedNotice
+                 */
+                int lookupSize = ((safePage + 1) * safeSize) + 1;
+
+                Pageable lookupPageable = PageRequest.of(
+                        0,
+                        lookupSize,
+                        newestSort
+                );
+
+                result = noticeService.search(
+                        filterDepartmentId,
+                        division,
+                        departmentName,
+                        title,
+                        content,
+                        lookupPageable
+                );
+
+                ArrayList<Map<String, Object>> filteredContent = new ArrayList<>();
+
+                for (NoticeResponse notice : result.getContent()) {
+                    Map<String, Object> noticeMap = toNoticeResponseMap(notice, admin, currentDepartmentId);
+                    String noticeId = getStringValue(noticeMap.get("id"));
+
+                    if (!Objects.equals(featuredPinnedNoticeId, noticeId)) {
+                        filteredContent.add(noticeMap);
+                    }
+                }
+
+                int fromIndex = Math.min(safePage * safeSize, filteredContent.size());
+                int toIndex = Math.min(fromIndex + safeSize, filteredContent.size());
+
+                responseContent.addAll(filteredContent.subList(fromIndex, toIndex));
+
+                totalElements = Math.max(result.getTotalElements() - 1, 0);
+                totalPages = (int) Math.ceil((double) totalElements / safeSize);
+            } else {
+                Pageable pageable = PageRequest.of(
+                        page,
+                        size,
+                        newestSort
+                );
+
+                result = noticeService.search(
+                        filterDepartmentId,
+                        division,
+                        departmentName,
+                        title,
+                        content,
+                        pageable
+                );
+
+                for (NoticeResponse notice : result.getContent()) {
+                    responseContent.add(toNoticeResponseMap(notice, admin, currentDepartmentId));
+                }
+
+                totalElements = result.getTotalElements();
+                totalPages = result.getTotalPages();
+            }
 
             Map<String, Object> response = new HashMap<>();
-            response.put("content", result.getContent());
-            response.put("totalElements", result.getTotalElements());
-            response.put("totalPages", result.getTotalPages());
-            response.put("number", result.getNumber());
-            response.put("size", result.getSize());
+            response.put("featuredPinnedNotice", featuredPinnedNotice);
+            response.put("content", responseContent);
+            response.put("isAdmin", admin);
+            response.put("currentDepartmentId", currentDepartmentId);
+            response.put("skipDepartmentFilter", skipDepartmentFilter);
+            response.put("includeFeaturedPinned", includeFeaturedPinned);
+            response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
+            response.put("totalElements", totalElements);
+            response.put("totalPages", totalPages);
+            response.put("number", page);
+            response.put("size", size);
 
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("message", "Search failed: " + e.getMessage()));
         }
+    }
+
+    private Map<String, Object> toNoticeResponseMap(
+            NoticeResponse notice,
+            boolean admin,
+            String currentDepartmentId
+    ) {
+        Map<String, Object> map = new HashMap<>();
+
+        try {
+            PropertyDescriptor[] descriptors = Introspector
+                    .getBeanInfo(notice.getClass(), Object.class)
+                    .getPropertyDescriptors();
+
+            for (PropertyDescriptor descriptor : descriptors) {
+                Method readMethod = descriptor.getReadMethod();
+
+                if (readMethod != null) {
+                    map.put(descriptor.getName(), readMethod.invoke(notice));
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        String noticeDepartmentId = getStringValue(map.get("departmentId"));
+        boolean canModify = admin || sameDepartment(currentDepartmentId, noticeDepartmentId);
+
+        map.put("canEdit", canModify);
+        map.put("canDelete", canModify);
+
+        return map;
+    }
+
+    private User getUserOrNull(String userId) {
+        if (userId == null || userId.trim().isEmpty()) {
+            return null;
+        }
+
+        Optional<User> userOpt = userService.findById(userId.trim());
+
+        return userOpt.orElse(null);
+    }
+
+    private String resolveDepartmentIdForCreateOrUpdate(User user, boolean admin, String requestDepartmentId) {
+        if (admin) {
+            return requestDepartmentId != null ? requestDepartmentId.trim() : null;
+        }
+
+        return user.getDepartmentId() != null ? user.getDepartmentId().trim() : null;
+    }
+
+    private boolean canModifyNotice(User user, boolean admin, Notice notice) {
+        if (admin) {
+            return true;
+        }
+
+        if (user == null || notice == null) {
+            return false;
+        }
+
+        return sameDepartment(user.getDepartmentId(), notice.getDepartmentId());
+    }
+
+    private String getStringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+
+        String result = String.valueOf(value).trim();
+
+        return result.isEmpty() ? null : result;
+    }
+
+    private boolean sameDepartment(String currentDepartmentId, String noticeDepartmentId) {
+        if (currentDepartmentId == null || noticeDepartmentId == null) {
+            return false;
+        }
+
+        return currentDepartmentId.trim().equals(noticeDepartmentId.trim());
+    }
+
+    private boolean isAdmin(User user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
+
+        String role = user.getRole().trim();
+
+        return "Admin".equalsIgnoreCase(role)
+                || "ADMIN".equalsIgnoreCase(role)
+                || "ROLE_ADMIN".equalsIgnoreCase(role);
     }
 }
