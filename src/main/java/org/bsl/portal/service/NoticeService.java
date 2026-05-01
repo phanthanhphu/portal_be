@@ -38,7 +38,15 @@ public class NoticeService {
         notice.setCreatedAt(now);
         notice.setUpdatedAt(now);
 
-        return repository.save(notice);
+        Notice created = repository.save(notice);
+
+        // Add notice id vào department.noticeIds sau khi MongoDB đã tạo id.
+        departmentService.addNoticeToDepartment(
+                created.getDepartmentId(),
+                created.getId()
+        );
+
+        return created;
     }
 
     // UPDATE
@@ -51,6 +59,7 @@ public class NoticeService {
         }
 
         Notice notice = optional.get();
+        String oldDepartmentId = notice.getDepartmentId();
 
         notice.setTitle(data.getTitle());
         notice.setContent(data.getContent());
@@ -58,15 +67,36 @@ public class NoticeService {
         notice.setPinned(data.getPinned());
         notice.setUserId(data.getUserId());
         notice.setDepartmentId(data.getDepartmentId());
-
         notice.setUpdatedAt(LocalDateTime.now());
 
-        return repository.save(notice);
+        Notice updated = repository.save(notice);
+
+        // Nếu đổi phòng ban: remove khỏi department cũ, add vào department mới.
+        // Nếu không đổi phòng ban: vẫn đảm bảo id đã có trong department.noticeIds.
+        departmentService.moveNoticeDepartment(
+                oldDepartmentId,
+                updated.getDepartmentId(),
+                updated.getId()
+        );
+
+        return updated;
     }
 
     // DELETE
     public void delete(String id) {
+        Notice existing = repository.findById(id).orElse(null);
+
+        if (existing == null) {
+            return;
+        }
+
+        String departmentId = existing.getDepartmentId();
+        String noticeId = existing.getId();
+
         repository.deleteById(id);
+
+        // Remove notice id khỏi department.noticeIds khi xóa notice.
+        departmentService.removeNoticeFromDepartment(departmentId, noticeId);
     }
 
     // GET BY ID
@@ -281,7 +311,6 @@ public class NoticeService {
         return response;
     }
 
-
     // PIN / UNPIN
     public Notice pin(String id, Boolean pinned) {
 
@@ -294,6 +323,11 @@ public class NoticeService {
         notice.setPinned(pinned);
         notice.setUpdatedAt(LocalDateTime.now());
 
-        return repository.save(notice);
+        Notice updated = repository.save(notice);
+
+        // Đảm bảo dữ liệu cũ cũng có noticeId trong department.noticeIds.
+        departmentService.addNoticeToDepartment(updated.getDepartmentId(), updated.getId());
+
+        return updated;
     }
 }

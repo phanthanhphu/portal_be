@@ -25,6 +25,8 @@ public class DepartmentFormDTO {
     @Size(max = 150, message = "Department name must not exceed 150 characters")
     private String departmentName;
 
+    private List<String> noticeIds;
+
     @Valid
     @NotEmpty(message = "Forms list must not be empty")
     private List<FormItemDTO> forms;
@@ -35,51 +37,18 @@ public class DepartmentFormDTO {
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private LocalDateTime updatedAt;
 
-    public String getId() {
-        return id;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public String getDivision() {
-        return division;
-    }
-
-    public void setDivision(String division) {
-        this.division = division;
-    }
-
-    public String getDepartmentName() {
-        return departmentName;
-    }
-
-    public void setDepartmentName(String departmentName) {
-        this.departmentName = departmentName;
-    }
-
-    public List<FormItemDTO> getForms() {
-        return forms;
-    }
-
-    public void setForms(List<FormItemDTO> forms) {
-        this.forms = forms;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
-    }
+    public String getId() { return id; }
+    public void setId(String id) { this.id = id; }
+    public String getDivision() { return division; }
+    public void setDivision(String division) { this.division = division; }
+    public String getDepartmentName() { return departmentName; }
+    public void setDepartmentName(String departmentName) { this.departmentName = departmentName; }
+    public List<String> getNoticeIds() { return noticeIds; }
+    public void setNoticeIds(List<String> noticeIds) { this.noticeIds = noticeIds; }
+    public List<FormItemDTO> getForms() { return forms; }
+    public void setForms(List<FormItemDTO> forms) { this.forms = forms; }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }

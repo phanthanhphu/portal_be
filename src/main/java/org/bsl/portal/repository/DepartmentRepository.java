@@ -19,7 +19,6 @@ public interface DepartmentRepository extends MongoRepository<Department, String
             String departmentName
     );
 
-
     List<Department> findByDivisionContainingIgnoreCase(String division);
 
     List<Department> findByDepartmentNameContainingIgnoreCase(String departmentName);

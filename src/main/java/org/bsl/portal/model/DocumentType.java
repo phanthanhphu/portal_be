@@ -4,6 +4,8 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Document(collection = "document_types")
 public class DocumentType {
@@ -13,6 +15,8 @@ public class DocumentType {
 
     private String name;
 
+    private List<DocumentTypeDepartment> departments = new ArrayList<>();
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
@@ -20,9 +24,16 @@ public class DocumentType {
     public DocumentType() {
     }
 
-    public DocumentType(String id, String name, LocalDateTime createdAt, LocalDateTime updatedAt) {
+    public DocumentType(
+            String id,
+            String name,
+            List<DocumentTypeDepartment> departments,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
+    ) {
         this.id = id;
         this.name = name;
+        this.departments = departments != null ? departments : new ArrayList<>();
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
@@ -33,6 +44,10 @@ public class DocumentType {
 
     public String getName() {
         return name;
+    }
+
+    public List<DocumentTypeDepartment> getDepartments() {
+        return departments;
     }
 
     public LocalDateTime getCreatedAt() {
@@ -49,6 +64,10 @@ public class DocumentType {
 
     public void setName(String name) {
         this.name = name;
+    }
+
+    public void setDepartments(List<DocumentTypeDepartment> departments) {
+        this.departments = departments != null ? departments : new ArrayList<>();
     }
 
     public void setCreatedAt(LocalDateTime createdAt) {

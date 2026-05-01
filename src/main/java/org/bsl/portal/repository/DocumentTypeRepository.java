@@ -1,6 +1,8 @@
 package org.bsl.portal.repository;
 
 import org.bsl.portal.model.DocumentType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import java.util.List;
@@ -13,4 +15,7 @@ public interface DocumentTypeRepository extends MongoRepository<DocumentType, St
     Optional<DocumentType> findByNameIgnoreCase(String name);
 
     List<DocumentType> findByNameContainingIgnoreCase(String name);
+
+    // SEARCH CÓ PHÂN TRANG
+    Page<DocumentType> findByNameContainingIgnoreCase(String name, Pageable pageable);
 }

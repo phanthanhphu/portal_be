@@ -3,7 +3,9 @@ package org.bsl.portal.repository;
 import org.bsl.portal.model.Notice;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
+import java.util.List;
+
 public interface NoticeRepository extends MongoRepository<Notice, String> {
 
-
+    List<Notice> findByDepartmentId(String departmentId);
 }

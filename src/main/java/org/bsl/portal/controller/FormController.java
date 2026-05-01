@@ -28,7 +28,7 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/forms")
-public class FormController {
+class FormController {
 
     @Autowired
     private FormService service;

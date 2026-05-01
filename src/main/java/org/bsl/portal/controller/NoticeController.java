@@ -166,16 +166,26 @@ public class NoticeController {
 
             String effectiveDepartmentId;
 
-            if (user != null) {
-                if (admin) {
-                    effectiveDepartmentId = departmentId != null && !departmentId.trim().isEmpty()
-                            ? departmentId.trim()
-                            : existing.getDepartmentId();
-                } else {
-                    effectiveDepartmentId = user.getDepartmentId();
+            if (user != null && !admin) {
+                String userDepartmentId = user.getDepartmentId() != null ? user.getDepartmentId().trim() : null;
+                String requestedDepartmentId = departmentId != null ? departmentId.trim() : null;
+
+                // User thường không được chuyển notice qua phòng ban khác.
+                // Trả lỗi rõ ràng thay vì âm thầm ép về phòng ban của user, vì điều đó làm FE tưởng đã đổi phòng nhưng data không đổi.
+                if (requestedDepartmentId != null
+                        && !requestedDepartmentId.isEmpty()
+                        && userDepartmentId != null
+                        && !requestedDepartmentId.equals(userDepartmentId)) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(Map.of("message", "Only admin can move notice to another department"));
                 }
+
+                effectiveDepartmentId = userDepartmentId;
             } else {
-                effectiveDepartmentId = departmentId;
+                // Admin hoặc request nội bộ không có userId: dùng departmentId FE gửi lên; nếu rỗng thì giữ phòng ban hiện tại.
+                effectiveDepartmentId = departmentId != null && !departmentId.trim().isEmpty()
+                        ? departmentId.trim()
+                        : existing.getDepartmentId();
             }
 
             if (effectiveDepartmentId == null || effectiveDepartmentId.trim().isEmpty()) {
@@ -189,10 +199,7 @@ public class NoticeController {
                         .body(Map.of("message", "Department with ID " + effectiveDepartmentId + " does not exist"));
             }
 
-            existing.setTitle(title.trim());
-            existing.setContent(content != null ? content.trim() : "");
-            existing.setDepartmentId(effectiveDepartmentId.trim());
-            existing.setPinned(pinned != null ? pinned : Boolean.TRUE.equals(existing.getPinned()));
+            String fileUrl = existing.getFileUrl();
 
             if (file != null && !file.isEmpty()) {
 
@@ -209,12 +216,20 @@ public class NoticeController {
 
                 Files.write(path, file.getBytes());
 
-                existing.setFileUrl("/files/" + fileName);
+                fileUrl = "/files/" + fileName;
             }
 
-            existing.setUpdatedAt(LocalDateTime.now());
+            // Không mutate object existing trước khi gọi service.
+            // Service cần đọc oldDepartmentId từ database để remove noticeId khỏi phòng ban cũ chính xác.
+            Notice updateData = new Notice();
+            updateData.setTitle(title.trim());
+            updateData.setContent(content != null ? content.trim() : "");
+            updateData.setUserId(existing.getUserId());
+            updateData.setDepartmentId(effectiveDepartmentId.trim());
+            updateData.setPinned(pinned != null ? pinned : Boolean.TRUE.equals(existing.getPinned()));
+            updateData.setFileUrl(fileUrl);
 
-            Notice updated = noticeService.update(id, existing);
+            Notice updated = noticeService.update(id, updateData);
 
             return ResponseEntity.ok(updated);
 
@@ -312,10 +327,7 @@ public class NoticeController {
                     .body(Map.of("message", "Notice not found"));
         }
 
-        notice.setPinned(Boolean.TRUE.equals(pinned));
-        notice.setUpdatedAt(LocalDateTime.now());
-
-        Notice updated = noticeService.update(id, notice);
+        Notice updated = noticeService.pin(id, Boolean.TRUE.equals(pinned));
 
         return ResponseEntity.ok(updated);
     }

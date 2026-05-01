@@ -14,6 +14,8 @@ public interface FormRepository extends MongoRepository<FormItem, String> {
 
     boolean existsByTitleAndDepartmentIdAndTypeId(String title, String departmentId, String typeId);
 
+    boolean existsByDepartmentIdAndTypeId(String departmentId, String typeId);
+
     List<FormItem> findByDepartmentId(String departmentId);
 
     List<FormItem> findByTypeId(String typeId);
