@@ -372,12 +372,13 @@ public class NoticeController {
             }
 
             /*
-             * Sort by createdAt first because the screen needs the newest notice by created time:
-             * - Pinned notice: newest pinned notice
-             * - Priority pinned: second newest pinned notice
+             * Sort by updatedAt first because the screen needs the newest pinned notice
+             * based on the last update time:
+             * - Pinned notice: newest updated pinned notice
+             * - Priority pinned: second newest updated pinned notice
              */
-            Sort newestSort = Sort.by(Sort.Direction.DESC, "createdAt")
-                    .and(Sort.by(Sort.Direction.DESC, "updatedAt"));
+            Sort newestSort = Sort.by(Sort.Direction.DESC, "updatedAt")
+                    .and(Sort.by(Sort.Direction.DESC, "createdAt"));
 
             ArrayList<Map<String, Object>> pinnedNotices = new ArrayList<>();
             Map<String, Object> featuredPinnedNotice = null;
@@ -469,9 +470,10 @@ public class NoticeController {
             int totalPages = (int) Math.ceil((double) totalElements / safeSize);
 
             Map<String, Object> response = new HashMap<>();
-            response.put("pinnedNotices", pinnedNotices);
-            response.put("featuredPinnedNotice", featuredPinnedNotice);
-            response.put("priorityPinnedNotice", priorityPinnedNotice);
+            // featuredPinnedNotice is now a list containing the 2 newest pinned notices.
+            // FE uses featuredPinnedNotice[0] for the hero/background pinned notice
+            // and featuredPinnedNotice[1] for the Notice panel Priority pinned card.
+            response.put("featuredPinnedNotice", pinnedNotices);
             response.put("content", responseContent);
             response.put("isAdmin", admin);
             response.put("currentDepartmentId", currentDepartmentId);
