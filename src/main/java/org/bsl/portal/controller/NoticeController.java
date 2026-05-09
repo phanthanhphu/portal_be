@@ -371,122 +371,107 @@ public class NoticeController {
                 }
             }
 
-            Sort newestSort = Sort.by(Sort.Direction.DESC, "updatedAt")
-                    .and(Sort.by(Sort.Direction.DESC, "createdAt"));
+            /*
+             * Sort by createdAt first because the screen needs the newest notice by created time:
+             * - Pinned notice: newest pinned notice
+             * - Priority pinned: second newest pinned notice
+             */
+            Sort newestSort = Sort.by(Sort.Direction.DESC, "createdAt")
+                    .and(Sort.by(Sort.Direction.DESC, "updatedAt"));
 
+            ArrayList<Map<String, Object>> pinnedNotices = new ArrayList<>();
             Map<String, Object> featuredPinnedNotice = null;
             String featuredPinnedNoticeId = null;
+            Map<String, Object> priorityPinnedNotice = null;
+            String priorityPinnedNoticeId = null;
 
             if (includeFeaturedPinned) {
-                Pageable featuredPageable = PageRequest.of(
-                        0,
-                        1,
-                        Sort.by(Sort.Direction.DESC, "pinned").and(newestSort)
-                );
-
-                Page<NoticeResponse> featuredResult = noticeService.search(
-                        filterDepartmentId,
-                        division,
-                        departmentName,
-                        title,
-                        content,
-                        featuredPageable
-                );
-
-                if (!featuredResult.getContent().isEmpty()) {
-                    Map<String, Object> candidate = toNoticeResponseMap(
-                            featuredResult.getContent().get(0),
-                            admin,
-                            currentDepartmentId
-                    );
-
-                    if (Boolean.TRUE.equals(candidate.get("pinned"))) {
-                        featuredPinnedNotice = candidate;
-                        featuredPinnedNoticeId = getStringValue(candidate.get("id"));
-                    }
-                }
-            }
-
-            Page<NoticeResponse> result;
-            ArrayList<Map<String, Object>> responseContent = new ArrayList<>();
-            long totalElements;
-            int totalPages;
-
-            if (includeFeaturedPinned && featuredPinnedNoticeId != null) {
-                int safePage = Math.max(page, 0);
-                int safeSize = Math.max(size, 1);
-
                 /*
-                 * We need content page to exclude featuredPinnedNotice.
-                 * Because NoticeService.search does not receive an exclude-id parameter,
-                 * fetch enough newest records from the beginning, remove the featured item,
-                 * then slice the requested page in memory.
-                 *
-                 * PageHome uses page=0 and size=30, so this returns:
-                 * - 1 featuredPinnedNotice
-                 * - 30 newest notices in content, excluding featuredPinnedNotice
+                 * Simple logic: get newest notices, filter pinned=true, take first 2.
+                 * This avoids returning null just because the second record in the page is not pinned.
                  */
-                int lookupSize = ((safePage + 1) * safeSize) + 1;
+                Pageable pinnedLookupPageable = PageRequest.of(0, 200, newestSort);
 
-                Pageable lookupPageable = PageRequest.of(
-                        0,
-                        lookupSize,
-                        newestSort
-                );
-
-                result = noticeService.search(
+                Page<NoticeResponse> pinnedLookupResult = noticeService.search(
                         filterDepartmentId,
                         division,
                         departmentName,
                         title,
                         content,
-                        lookupPageable
+                        pinnedLookupPageable
                 );
 
-                ArrayList<Map<String, Object>> filteredContent = new ArrayList<>();
-
-                for (NoticeResponse notice : result.getContent()) {
+                for (NoticeResponse notice : pinnedLookupResult.getContent()) {
                     Map<String, Object> noticeMap = toNoticeResponseMap(notice, admin, currentDepartmentId);
-                    String noticeId = getStringValue(noticeMap.get("id"));
 
-                    if (!Objects.equals(featuredPinnedNoticeId, noticeId)) {
-                        filteredContent.add(noticeMap);
+                    if (!Boolean.TRUE.equals(noticeMap.get("pinned"))) {
+                        continue;
+                    }
+
+                    pinnedNotices.add(noticeMap);
+
+                    if (pinnedNotices.size() == 2) {
+                        break;
                     }
                 }
 
-                int fromIndex = Math.min(safePage * safeSize, filteredContent.size());
-                int toIndex = Math.min(fromIndex + safeSize, filteredContent.size());
-
-                responseContent.addAll(filteredContent.subList(fromIndex, toIndex));
-
-                totalElements = Math.max(result.getTotalElements() - 1, 0);
-                totalPages = (int) Math.ceil((double) totalElements / safeSize);
-            } else {
-                Pageable pageable = PageRequest.of(
-                        page,
-                        size,
-                        newestSort
-                );
-
-                result = noticeService.search(
-                        filterDepartmentId,
-                        division,
-                        departmentName,
-                        title,
-                        content,
-                        pageable
-                );
-
-                for (NoticeResponse notice : result.getContent()) {
-                    responseContent.add(toNoticeResponseMap(notice, admin, currentDepartmentId));
+                if (!pinnedNotices.isEmpty()) {
+                    featuredPinnedNotice = pinnedNotices.get(0);
+                    featuredPinnedNoticeId = getStringValue(featuredPinnedNotice.get("id"));
                 }
 
-                totalElements = result.getTotalElements();
-                totalPages = result.getTotalPages();
+                if (pinnedNotices.size() > 1) {
+                    priorityPinnedNotice = pinnedNotices.get(1);
+                    priorityPinnedNoticeId = getStringValue(priorityPinnedNotice.get("id"));
+                }
             }
+
+            int safePage = Math.max(page, 0);
+            int safeSize = Math.max(size, 1);
+
+            /*
+             * Load a little more than the requested page because pinned notices are removed
+             * from the normal content list to avoid duplicate display.
+             */
+            int lookupSize = ((safePage + 1) * safeSize) + pinnedNotices.size() + 10;
+
+            Pageable lookupPageable = PageRequest.of(0, lookupSize, newestSort);
+
+            Page<NoticeResponse> result = noticeService.search(
+                    filterDepartmentId,
+                    division,
+                    departmentName,
+                    title,
+                    content,
+                    lookupPageable
+            );
+
+            ArrayList<Map<String, Object>> filteredContent = new ArrayList<>();
+
+            for (NoticeResponse notice : result.getContent()) {
+                Map<String, Object> noticeMap = toNoticeResponseMap(notice, admin, currentDepartmentId);
+                String noticeId = getStringValue(noticeMap.get("id"));
+
+                if (Objects.equals(featuredPinnedNoticeId, noticeId)
+                        || Objects.equals(priorityPinnedNoticeId, noticeId)) {
+                    continue;
+                }
+
+                filteredContent.add(noticeMap);
+            }
+
+            int fromIndex = Math.min(safePage * safeSize, filteredContent.size());
+            int toIndex = Math.min(fromIndex + safeSize, filteredContent.size());
+
+            ArrayList<Map<String, Object>> responseContent = new ArrayList<>(filteredContent.subList(fromIndex, toIndex));
+
+            long totalElements = Math.max(result.getTotalElements() - pinnedNotices.size(), 0);
+            int totalPages = (int) Math.ceil((double) totalElements / safeSize);
 
             Map<String, Object> response = new HashMap<>();
+            response.put("pinnedNotices", pinnedNotices);
             response.put("featuredPinnedNotice", featuredPinnedNotice);
+            response.put("priorityPinnedNotice", priorityPinnedNotice);
             response.put("content", responseContent);
             response.put("isAdmin", admin);
             response.put("currentDepartmentId", currentDepartmentId);
