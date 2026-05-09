@@ -290,4 +290,8 @@ public class DocumentTypeService {
 
         return value.trim();
     }
+
+    public boolean existsByDepartmentId(String departmentId) {
+        return repository.existsByDepartmentsContaining(departmentId);
+    }
 }

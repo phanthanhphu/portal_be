@@ -2,8 +2,7 @@ package org.bsl.portal.controller;
 
 import org.bsl.portal.model.Department;
 import org.bsl.portal.model.User;
-import org.bsl.portal.service.DepartmentService;
-import org.bsl.portal.service.UserService;
+import org.bsl.portal.service.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +22,18 @@ public class DepartmentController {
 
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private AppLinkService appLinkService;
+
+    @Autowired
+    private NoticeService noticeService;
+
+    @Autowired
+    private FormService formService;
+
+    @Autowired
+    private DocumentTypeService documentTypeService;
 
     @PostMapping
     public ResponseEntity<?> create(@RequestParam String division, @RequestParam String departmentName) {
@@ -77,10 +88,69 @@ public class DepartmentController {
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable String id) {
         try {
-            service.delete(id);
-            return ResponseEntity.ok(Map.of("status", 200, "message", "Deleted successfully"));
+            String departmentId = id != null ? id.trim() : null;
+
+            if (departmentId == null || departmentId.isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("status", 400, "message", "Department ID is required"));
+            }
+
+            Department department = service.getById(departmentId);
+
+            if (department == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("status", 404, "message", "Department not found"));
+            }
+
+            // 1. Check AppLink trước
+            if (appLinkService.existsByDepartmentId(departmentId)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(Map.of(
+                                "status", 409,
+                                "message", "Cannot delete this department because it is being used by App Link"
+                        ));
+            }
+
+            // 2. Check Notice
+            if (noticeService.existsByDepartmentId(departmentId)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(Map.of(
+                                "status", 409,
+                                "message", "Cannot delete this department because it is being used by Notice"
+                        ));
+            }
+
+            // 3. Check Document/Form
+            if (formService.existsByDepartmentId(departmentId)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(Map.of(
+                                "status", 409,
+                                "message", "Cannot delete this department because it is being used by Document"
+                        ));
+            }
+
+            // 4. Check Document Type nếu DocumentType có gắn departmentId
+            if (documentTypeService.existsByDepartmentId(departmentId)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(Map.of(
+                                "status", 409,
+                                "message", "Cannot delete this department because it is being used by Document Type"
+                        ));
+            }
+
+            service.delete(departmentId);
+
+            return ResponseEntity.ok(Map.of(
+                    "status", 200,
+                    "message", "Deleted successfully"
+            ));
+
         } catch (RuntimeException ex) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("status", 404, "message", ex.getMessage()));
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "status", 500,
+                            "message", "Delete failed: " + ex.getMessage()
+                    ));
         }
     }
 

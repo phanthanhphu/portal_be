@@ -193,4 +193,8 @@ public class AppLinkService {
     private String normalize(String value) {
         return value == null ? "" : value.trim();
     }
+
+    public boolean existsByDepartmentId(String departmentId) {
+        return repository.existsByDepartmentId(departmentId);
+    }
 }

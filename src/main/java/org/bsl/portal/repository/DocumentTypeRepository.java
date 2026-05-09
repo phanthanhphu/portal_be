@@ -14,7 +14,7 @@ public interface DocumentTypeRepository extends MongoRepository<DocumentType, St
 
     Optional<DocumentType> findByNameIgnoreCase(String name);
 
-    List<DocumentType> findByNameContainingIgnoreCase(String name);
+    boolean existsByDepartmentsContaining(String departmentId);
 
     // SEARCH CÓ PHÂN TRANG
     Page<DocumentType> findByNameContainingIgnoreCase(String name, Pageable pageable);

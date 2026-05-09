@@ -339,4 +339,12 @@ public class FormService {
 
         return source.toLowerCase().contains(keyword.toLowerCase());
     }
+
+    public boolean existsByDepartmentId(String departmentId) {
+        return repository.existsByDepartmentId(departmentId);
+    }
+
+    public boolean existsByTypeId(String typeId) {
+        return repository.existsByTypeId(typeId);
+    }
 }

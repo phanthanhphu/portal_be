@@ -20,7 +20,6 @@ public interface FormRepository extends MongoRepository<FormItem, String> {
 
     List<FormItem> findByTypeId(String typeId);
 
-    List<FormItem> findByDepartmentIdAndTypeId(String departmentId, String typeId);
 
     // Search form/document:
     // - departmentId rỗng/null thì bỏ qua department
@@ -40,4 +39,8 @@ public interface FormRepository extends MongoRepository<FormItem, String> {
             String description,
             Pageable pageable
     );
+
+    boolean existsByDepartmentId(String departmentId);
+
+    boolean existsByTypeId(String typeId);
 }

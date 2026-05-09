@@ -330,4 +330,8 @@ public class NoticeService {
 
         return updated;
     }
+
+    public boolean existsByDepartmentId(String departmentId) {
+        return repository.existsByDepartmentId(departmentId);
+    }
 }

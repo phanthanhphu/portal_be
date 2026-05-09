@@ -60,4 +60,6 @@ public interface AppLinkRepository extends MongoRepository<AppLink, String> {
             String desc,
             Pageable pageable
     );
+
+    boolean existsByDepartmentId(String departmentId);
 }
