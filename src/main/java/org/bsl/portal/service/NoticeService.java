@@ -64,6 +64,23 @@ public class NoticeService {
         notice.setTitle(data.getTitle());
         notice.setContent(data.getContent());
         notice.setFileUrl(data.getFileUrl());
+        notice.setPreviewUrl(data.getPreviewUrl());
+        notice.setFileUrls(cleanUrls(data.getFileUrls()));
+        notice.setPreviewUrls(cleanUrls(data.getPreviewUrls()));
+
+        // Keep old field synced with list fields
+        if (notice.getFileUrls() != null && !notice.getFileUrls().isEmpty()) {
+            notice.setFileUrl(notice.getFileUrls().get(0));
+        } else {
+            notice.setFileUrl(null);
+        }
+
+        if (notice.getPreviewUrls() != null && !notice.getPreviewUrls().isEmpty()) {
+            notice.setPreviewUrl(notice.getPreviewUrls().get(0));
+        } else {
+            notice.setPreviewUrl(notice.getFileUrl());
+        }
+
         notice.setPinned(data.getPinned());
         notice.setUserId(data.getUserId());
         notice.setDepartmentId(data.getDepartmentId());
@@ -293,6 +310,9 @@ public class NoticeService {
         response.setTitle(notice.getTitle());
         response.setContent(notice.getContent());
         response.setFileUrl(notice.getFileUrl());
+        response.setPreviewUrl(notice.getPreviewUrl());
+        response.setFileUrls(cleanUrls(notice.getFileUrls()));
+        response.setPreviewUrls(cleanUrls(notice.getPreviewUrls()));
         response.setPinned(notice.getPinned());
         response.setUserId(notice.getUserId());
         response.setDepartmentId(notice.getDepartmentId());
@@ -309,6 +329,23 @@ public class NoticeService {
         }
 
         return response;
+    }
+
+
+    private List<String> cleanUrls(List<String> urls) {
+        List<String> result = new ArrayList<>();
+
+        if (urls == null) {
+            return result;
+        }
+
+        for (String url : urls) {
+            if (url != null && !url.trim().isEmpty() && !result.contains(url.trim())) {
+                result.add(url.trim());
+            }
+        }
+
+        return result;
     }
 
     // PIN / UNPIN

@@ -5,6 +5,8 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Document(collection = "notices")
 public class Notice {
@@ -18,8 +20,17 @@ public class Notice {
     // nội dung
     private String content;
 
-    // file upload (pdf, image, doc...)
+    // file upload cũ: giữ lại để không lỗi dữ liệu/API/UI cũ
     private String fileUrl;
+
+    // preview file cũ: giữ lại để đồng bộ với nhiều file
+    private String previewUrl;
+
+    // danh sách file mới: hỗ trợ nhiều file
+    private List<String> fileUrls = new ArrayList<>();
+
+    // danh sách preview mới
+    private List<String> previewUrls = new ArrayList<>();
 
     // ghim thông báo
     private Boolean pinned;
@@ -47,17 +58,122 @@ public class Notice {
         this.pinned = false;
     }
 
+    // Constructor cũ: giữ lại để không làm lỗi code đang gọi hiện tại
     public Notice(String title, String content, String fileUrl, Boolean pinned, String userId, String departmentId) {
         this.title = title;
         this.content = content;
         this.fileUrl = fileUrl;
+        this.previewUrl = fileUrl;
         this.pinned = pinned;
         this.userId = userId;
         this.departmentId = departmentId;
 
+        if (fileUrl != null && !fileUrl.trim().isEmpty()) {
+            this.fileUrls.add(fileUrl.trim());
+            this.previewUrls.add(fileUrl.trim());
+        }
+
         LocalDateTime now = LocalDateTime.now();
         this.createdAt = now;
         this.updatedAt = now;
+    }
+
+    // Constructor mới: dùng khi tạo notice có nhiều file
+    public Notice(
+            String title,
+            String content,
+            String fileUrl,
+            String previewUrl,
+            List<String> fileUrls,
+            List<String> previewUrls,
+            Boolean pinned,
+            String userId,
+            String departmentId
+    ) {
+        this.title = title;
+        this.content = content;
+        this.fileUrls = cleanUrls(fileUrls);
+        this.previewUrls = cleanUrls(previewUrls);
+        this.pinned = pinned;
+        this.userId = userId;
+        this.departmentId = departmentId;
+
+        if (!this.fileUrls.isEmpty()) {
+            this.fileUrl = this.fileUrls.get(0);
+        } else {
+            this.fileUrl = fileUrl;
+
+            if (fileUrl != null && !fileUrl.trim().isEmpty()) {
+                this.fileUrls.add(fileUrl.trim());
+            }
+        }
+
+        if (!this.previewUrls.isEmpty()) {
+            this.previewUrl = this.previewUrls.get(0);
+        } else {
+            this.previewUrl = previewUrl != null ? previewUrl : this.fileUrl;
+
+            if (this.previewUrl != null && !this.previewUrl.trim().isEmpty()) {
+                this.previewUrls.add(this.previewUrl.trim());
+            }
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        this.createdAt = now;
+        this.updatedAt = now;
+    }
+
+    private List<String> cleanUrls(List<String> urls) {
+        List<String> result = new ArrayList<>();
+
+        if (urls == null) {
+            return result;
+        }
+
+        for (String url : urls) {
+            if (url != null && !url.trim().isEmpty() && !result.contains(url.trim())) {
+                result.add(url.trim());
+            }
+        }
+
+        return result;
+    }
+
+    private void syncSingleFileFromList() {
+        if (fileUrls != null && !fileUrls.isEmpty()) {
+            this.fileUrl = fileUrls.get(0);
+        } else {
+            this.fileUrl = null;
+        }
+
+        if (previewUrls != null && !previewUrls.isEmpty()) {
+            this.previewUrl = previewUrls.get(0);
+        } else {
+            this.previewUrl = this.fileUrl;
+        }
+    }
+
+    private void syncListFromSingleFile() {
+        if ((fileUrls == null || fileUrls.isEmpty())
+                && fileUrl != null
+                && !fileUrl.trim().isEmpty()) {
+            this.fileUrls = new ArrayList<>();
+            this.fileUrls.add(fileUrl.trim());
+        }
+
+        if ((previewUrls == null || previewUrls.isEmpty())
+                && previewUrl != null
+                && !previewUrl.trim().isEmpty()) {
+            this.previewUrls = new ArrayList<>();
+            this.previewUrls.add(previewUrl.trim());
+        }
+
+        if ((previewUrls == null || previewUrls.isEmpty())
+                && fileUrl != null
+                && !fileUrl.trim().isEmpty()) {
+            this.previewUrls = new ArrayList<>();
+            this.previewUrls.add(fileUrl.trim());
+        }
     }
 
     public String getId() {
@@ -90,6 +206,58 @@ public class Notice {
 
     public void setFileUrl(String fileUrl) {
         this.fileUrl = fileUrl;
+
+        if (this.fileUrls == null) {
+            this.fileUrls = new ArrayList<>();
+        }
+
+        if (this.fileUrls.isEmpty() && fileUrl != null && !fileUrl.trim().isEmpty()) {
+            this.fileUrls.add(fileUrl.trim());
+        }
+
+        if (this.previewUrl == null || this.previewUrl.trim().isEmpty()) {
+            this.previewUrl = fileUrl;
+        }
+
+        syncListFromSingleFile();
+    }
+
+    public String getPreviewUrl() {
+        return previewUrl;
+    }
+
+    public void setPreviewUrl(String previewUrl) {
+        this.previewUrl = previewUrl;
+
+        if (this.previewUrls == null) {
+            this.previewUrls = new ArrayList<>();
+        }
+
+        if (this.previewUrls.isEmpty() && previewUrl != null && !previewUrl.trim().isEmpty()) {
+            this.previewUrls.add(previewUrl.trim());
+        }
+
+        syncListFromSingleFile();
+    }
+
+    public List<String> getFileUrls() {
+        syncListFromSingleFile();
+        return fileUrls;
+    }
+
+    public void setFileUrls(List<String> fileUrls) {
+        this.fileUrls = cleanUrls(fileUrls);
+        syncSingleFileFromList();
+    }
+
+    public List<String> getPreviewUrls() {
+        syncListFromSingleFile();
+        return previewUrls;
+    }
+
+    public void setPreviewUrls(List<String> previewUrls) {
+        this.previewUrls = cleanUrls(previewUrls);
+        syncSingleFileFromList();
     }
 
     public Boolean getPinned() {

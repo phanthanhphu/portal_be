@@ -22,10 +22,12 @@ import java.lang.reflect.Method;
 import java.nio.file.*;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/notices")
@@ -40,6 +42,7 @@ public class NoticeController {
     @Autowired
     private UserService userService;
 
+    private static final int MAX_FILES = 5;
     private final String FILE_DIR = "files/";
 
     // CREATE NOTICE
@@ -50,7 +53,9 @@ public class NoticeController {
             @RequestParam String userId,
             @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) Boolean pinned,
-            @RequestParam(required = false) MultipartFile file) {
+            @RequestParam(value = "files", required = false) List<MultipartFile> files,
+            // Support FE cũ nếu đang gửi field name là "file"
+            @RequestParam(value = "file", required = false) MultipartFile file) {
 
         try {
 
@@ -81,19 +86,26 @@ public class NoticeController {
                         .body(Map.of("message", "Department with ID " + effectiveDepartmentId + " does not exist"));
             }
 
-            String fileUrl = null;
+            List<MultipartFile> uploadFiles = normalizeFiles(files, file);
 
-            if (file != null && !file.isEmpty()) {
+            if (uploadFiles.size() > MAX_FILES) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "You can upload maximum " + MAX_FILES + " files"));
+            }
 
-                String fileName = System.currentTimeMillis() + "_" + file.getOriginalFilename();
+            List<String> savedFileUrls = new ArrayList<>();
 
-                Path path = Paths.get(FILE_DIR + fileName);
+            try {
+                for (MultipartFile uploadFile : uploadFiles) {
+                    savedFileUrls.add(saveFile(uploadFile));
+                }
+            } catch (Exception e) {
+                for (String savedUrl : savedFileUrls) {
+                    deleteFileByUrl(savedUrl);
+                }
 
-                Files.createDirectories(path.getParent());
-
-                Files.write(path, file.getBytes());
-
-                fileUrl = "/files/" + fileName;
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(Map.of("message", "Failed to save files: " + e.getMessage()));
             }
 
             Notice notice = new Notice();
@@ -103,7 +115,7 @@ public class NoticeController {
             notice.setUserId(userId.trim());
             notice.setDepartmentId(effectiveDepartmentId.trim());
             notice.setPinned(pinned != null ? pinned : false);
-            notice.setFileUrl(fileUrl);
+            syncFileFields(notice, savedFileUrls);
 
             LocalDateTime now = LocalDateTime.now();
             notice.setCreatedAt(now);
@@ -129,7 +141,19 @@ public class NoticeController {
             @RequestParam(required = false) String userId,
             @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) Boolean pinned,
-            @RequestParam(required = false) MultipartFile file) {
+            /*
+             * FE mới gửi danh sách file cũ CÒN GIỮ LẠI.
+             * Ví dụ cũ có [file1, file2], user xóa file1
+             * thì FE gửi fileUrls = [file2].
+             */
+            @RequestParam(value = "fileUrls", required = false) List<String> keepFileUrls,
+            /*
+             * FE cũ hoặc UI dạng remove riêng có thể gửi danh sách file muốn xóa.
+             */
+            @RequestParam(value = "removeFileUrls", required = false) List<String> removeFileUrls,
+            @RequestParam(value = "files", required = false) List<MultipartFile> files,
+            // Support FE cũ nếu đang gửi field name là "file"
+            @RequestParam(value = "file", required = false) MultipartFile file) {
 
         try {
 
@@ -199,24 +223,71 @@ public class NoticeController {
                         .body(Map.of("message", "Department with ID " + effectiveDepartmentId + " does not exist"));
             }
 
-            String fileUrl = existing.getFileUrl();
+            List<String> oldFileUrls = getExistingFileUrls(existing);
+            List<String> keepUrlsFromRequest = normalizeFileUrls(keepFileUrls);
+            List<String> currentFileUrls = new ArrayList<>();
 
-            if (file != null && !file.isEmpty()) {
-
-                if (existing.getFileUrl() != null) {
-                    Path oldPath = Paths.get(existing.getFileUrl().replace("/files/", "files/"));
-                    Files.deleteIfExists(oldPath);
+            /*
+             * FE mới chỉ gửi fileUrls = danh sách file cũ CÒN GIỮ LẠI.
+             * Ví dụ cũ [1, 2], user xóa 1 thì FE gửi fileUrls = [2].
+             * Backend tự xóa khỏi source file nào cũ nhưng không còn trong fileUrls.
+             */
+            if (keepFileUrls != null) {
+                for (String keepUrl : keepUrlsFromRequest) {
+                    if (oldFileUrls.contains(keepUrl)) {
+                        currentFileUrls.add(keepUrl);
+                    }
                 }
 
-                String fileName = System.currentTimeMillis() + "_" + file.getOriginalFilename();
+                for (String oldUrl : oldFileUrls) {
+                    if (!currentFileUrls.contains(oldUrl)) {
+                        deleteFileByUrl(oldUrl);
+                    }
+                }
+            } else {
+                // Tương thích FE cũ: nếu không gửi fileUrls thì giữ nguyên file cũ
+                currentFileUrls = new ArrayList<>(oldFileUrls);
+            }
 
-                Path path = Paths.get(FILE_DIR + fileName);
+            // Tương thích FE cũ nếu vẫn gửi removeFileUrls
+            List<String> removeUrls = normalizeFileUrls(removeFileUrls);
 
-                Files.createDirectories(path.getParent());
+            if (!removeUrls.isEmpty()) {
+                List<String> remainingUrls = new ArrayList<>();
 
-                Files.write(path, file.getBytes());
+                for (String currentUrl : currentFileUrls) {
+                    if (removeUrls.contains(currentUrl)) {
+                        deleteFileByUrl(currentUrl);
+                    } else {
+                        remainingUrls.add(currentUrl);
+                    }
+                }
 
-                fileUrl = "/files/" + fileName;
+                currentFileUrls = remainingUrls;
+            }
+
+            List<MultipartFile> uploadFiles = normalizeFiles(files, file);
+
+            if (currentFileUrls.size() + uploadFiles.size() > MAX_FILES) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "You can upload maximum " + MAX_FILES + " files"));
+            }
+
+            List<String> newSavedUrls = new ArrayList<>();
+
+            try {
+                for (MultipartFile uploadFile : uploadFiles) {
+                    String savedUrl = saveFile(uploadFile);
+                    newSavedUrls.add(savedUrl);
+                    currentFileUrls.add(savedUrl);
+                }
+            } catch (Exception e) {
+                for (String savedUrl : newSavedUrls) {
+                    deleteFileByUrl(savedUrl);
+                }
+
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(Map.of("message", "Failed to save new files: " + e.getMessage()));
             }
 
             // Không mutate object existing trước khi gọi service.
@@ -227,7 +298,7 @@ public class NoticeController {
             updateData.setUserId(existing.getUserId());
             updateData.setDepartmentId(effectiveDepartmentId.trim());
             updateData.setPinned(pinned != null ? pinned : Boolean.TRUE.equals(existing.getPinned()));
-            updateData.setFileUrl(fileUrl);
+            syncFileFields(updateData, currentFileUrls);
 
             Notice updated = noticeService.update(id, updateData);
 
@@ -271,11 +342,10 @@ public class NoticeController {
                 }
             }
 
-            if (existing.getFileUrl() != null) {
+            List<String> fileUrls = getExistingFileUrls(existing);
 
-                Path path = Paths.get(existing.getFileUrl().replace("/files/", "files/"));
-
-                Files.deleteIfExists(path);
+            for (String fileUrl : fileUrls) {
+                deleteFileByUrl(fileUrl);
             }
 
             noticeService.delete(id);
@@ -514,6 +584,54 @@ public class NoticeController {
         } catch (Exception ignored) {
         }
 
+        String noticeId = getStringValue(map.get("id"));
+        Notice fullNotice = null;
+
+        if (noticeId != null && !noticeId.trim().isEmpty()) {
+            fullNotice = noticeService.getById(noticeId.trim());
+        }
+
+        List<String> fileUrls = new ArrayList<>();
+
+        if (fullNotice != null) {
+            fileUrls = getExistingFileUrls(fullNotice);
+        }
+
+        if (fileUrls.isEmpty()) {
+            Object dtoFileUrls = map.get("fileUrls");
+            if (dtoFileUrls instanceof List<?>) {
+                List<String> urls = new ArrayList<>();
+                for (Object url : (List<?>) dtoFileUrls) {
+                    if (url != null) {
+                        urls.add(String.valueOf(url));
+                    }
+                }
+                fileUrls = normalizeFileUrls(urls);
+            }
+        }
+
+        if (fileUrls.isEmpty()) {
+            String singleFileUrl = getStringValue(map.get("fileUrl"));
+            if (singleFileUrl != null && !singleFileUrl.trim().isEmpty()) {
+                fileUrls.add(singleFileUrl.trim());
+            }
+        }
+
+        List<String> previewUrls = new ArrayList<>();
+
+        if (fullNotice != null) {
+            previewUrls = normalizeFileUrls(fullNotice.getPreviewUrls());
+        }
+
+        if (previewUrls.isEmpty()) {
+            previewUrls = new ArrayList<>(fileUrls);
+        }
+
+        map.put("fileUrl", fileUrls.isEmpty() ? null : fileUrls.get(0));
+        map.put("previewUrl", previewUrls.isEmpty() ? map.get("fileUrl") : previewUrls.get(0));
+        map.put("fileUrls", fileUrls);
+        map.put("previewUrls", previewUrls);
+
         String noticeDepartmentId = getStringValue(map.get("departmentId"));
         boolean canModify = admin || sameDepartment(currentDepartmentId, noticeDepartmentId);
 
@@ -521,6 +639,130 @@ public class NoticeController {
         map.put("canDelete", canModify);
 
         return map;
+    }
+
+
+    private List<MultipartFile> normalizeFiles(List<MultipartFile> files, MultipartFile oldSingleFile) {
+        List<MultipartFile> result = new ArrayList<>();
+
+        if (files != null) {
+            for (MultipartFile uploadFile : files) {
+                if (uploadFile != null && !uploadFile.isEmpty()) {
+                    result.add(uploadFile);
+                }
+            }
+        }
+
+        if (oldSingleFile != null && !oldSingleFile.isEmpty()) {
+            result.add(oldSingleFile);
+        }
+
+        return result;
+    }
+
+    private List<String> normalizeFileUrls(List<String> urls) {
+        List<String> result = new ArrayList<>();
+
+        if (urls == null) {
+            return result;
+        }
+
+        for (String url : urls) {
+            if (url != null && !url.trim().isEmpty() && !result.contains(url.trim())) {
+                result.add(url.trim());
+            }
+        }
+
+        return result;
+    }
+
+    private List<String> getExistingFileUrls(Notice notice) {
+        List<String> result = new ArrayList<>();
+
+        if (notice == null) {
+            return result;
+        }
+
+        if (notice.getFileUrls() != null) {
+            for (String url : notice.getFileUrls()) {
+                if (url != null && !url.trim().isEmpty() && !result.contains(url.trim())) {
+                    result.add(url.trim());
+                }
+            }
+        }
+
+        // Support data cũ chỉ có 1 fileUrl
+        if (result.isEmpty() && notice.getFileUrl() != null && !notice.getFileUrl().trim().isEmpty()) {
+            result.add(notice.getFileUrl().trim());
+        }
+
+        return result;
+    }
+
+    private String saveFile(MultipartFile file) throws Exception {
+        String originalName = file.getOriginalFilename();
+        String safeOriginalName = originalName == null || originalName.trim().isEmpty()
+                ? "file"
+                : Paths.get(originalName).getFileName().toString();
+
+        String fileName = System.currentTimeMillis()
+                + "_"
+                + UUID.randomUUID()
+                + "_"
+                + safeOriginalName;
+
+        Path uploadDir = Paths.get(FILE_DIR).toAbsolutePath().normalize();
+        Files.createDirectories(uploadDir);
+
+        Path filePath = uploadDir.resolve(fileName).normalize();
+
+        if (!filePath.startsWith(uploadDir)) {
+            throw new SecurityException("Invalid file path");
+        }
+
+        Files.write(filePath, file.getBytes());
+
+        return "/files/" + fileName;
+    }
+
+    private void deleteFileByUrl(String fileUrl) {
+        try {
+            if (fileUrl == null || fileUrl.trim().isEmpty()) {
+                return;
+            }
+
+            if (!fileUrl.startsWith("/files/")) {
+                return;
+            }
+
+            String fileName = fileUrl.replace("/files/", "");
+
+            Path uploadDir = Paths.get(FILE_DIR).toAbsolutePath().normalize();
+            Path filePath = uploadDir.resolve(fileName).normalize();
+
+            if (filePath.startsWith(uploadDir)) {
+                Files.deleteIfExists(filePath);
+            }
+
+        } catch (Exception ignored) {
+            // Không cho lỗi xóa file vật lý làm fail toàn bộ API
+        }
+    }
+
+    private void syncFileFields(Notice notice, List<String> fileUrls) {
+        List<String> cleanUrls = normalizeFileUrls(fileUrls);
+
+        notice.setFileUrls(cleanUrls);
+        notice.setPreviewUrls(new ArrayList<>(cleanUrls));
+
+        // Giữ field cũ để FE cũ không lỗi
+        if (!cleanUrls.isEmpty()) {
+            notice.setFileUrl(cleanUrls.get(0));
+            notice.setPreviewUrl(cleanUrls.get(0));
+        } else {
+            notice.setFileUrl(null);
+            notice.setPreviewUrl(null);
+        }
     }
 
     private User getUserOrNull(String userId) {

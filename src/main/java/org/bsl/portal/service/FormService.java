@@ -80,11 +80,38 @@ public class FormService {
         existing.setDescription(newItem.getDescription());
         existing.setDepartmentId(newItem.getDepartmentId());
         existing.setTypeId(newItem.getTypeId());
+        existing.setFileType(newItem.getFileType());
 
-        if (newItem.getFileUrl() != null && !newItem.getFileUrl().isEmpty()) {
-            existing.setFileUrl(newItem.getFileUrl());
-            existing.setFileType(newItem.getFileType());
-            existing.setPreviewUrl(newItem.getPreviewUrl());
+        /*
+         * IMPORTANT FOR MULTI FILE:
+         * Controller already calculates the correct fileUrls:
+         * - old files still kept from FE fileUrls
+         * - plus newly uploaded files
+         *
+         * Service must save BOTH old single-file fields and new list fields.
+         * Do not wrap this inside "if newItem.getFileUrl() != null",
+         * because user may delete all files and fileUrl must become null.
+         */
+        existing.setFileUrl(newItem.getFileUrl());
+        existing.setPreviewUrl(newItem.getPreviewUrl());
+
+        existing.setFileUrls(cleanUrls(newItem.getFileUrls()));
+        existing.setPreviewUrls(cleanUrls(newItem.getPreviewUrls()));
+
+        /*
+         * Keep old fields synced with list fields.
+         * Example: fileUrls = [file2], then fileUrl must also be file2.
+         */
+        if (existing.getFileUrls() != null && !existing.getFileUrls().isEmpty()) {
+            existing.setFileUrl(existing.getFileUrls().get(0));
+        } else {
+            existing.setFileUrl(null);
+        }
+
+        if (existing.getPreviewUrls() != null && !existing.getPreviewUrls().isEmpty()) {
+            existing.setPreviewUrl(existing.getPreviewUrls().get(0));
+        } else {
+            existing.setPreviewUrl(existing.getFileUrl());
         }
 
         existing.setUpdatedAt(LocalDateTime.now());
@@ -304,7 +331,7 @@ public class FormService {
     }
 
     private FormResponse toFormResponse(FormItem form, Department dept) {
-        return new FormResponse(
+        FormResponse response = new FormResponse(
                 form.getId(),
                 form.getTitle(),
                 form.getDescription(),
@@ -318,6 +345,29 @@ public class FormService {
                 form.getCreatedAt(),
                 form.getUpdatedAt()
         );
+
+        // Support multi-file response for getAll/search
+        response.setFileUrls(cleanUrls(form.getFileUrls()));
+        response.setPreviewUrls(cleanUrls(form.getPreviewUrls()));
+
+        return response;
+    }
+
+
+    private List<String> cleanUrls(List<String> urls) {
+        List<String> result = new ArrayList<>();
+
+        if (urls == null) {
+            return result;
+        }
+
+        for (String url : urls) {
+            if (url != null && !url.trim().isEmpty() && !result.contains(url.trim())) {
+                result.add(url.trim());
+            }
+        }
+
+        return result;
     }
 
     private String normalize(String value) {
