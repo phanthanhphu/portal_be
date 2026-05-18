@@ -1,6 +1,7 @@
 package org.bsl.portal.controller;
 
 import org.bsl.portal.dto.NoticeResponse;
+import org.bsl.portal.common.socket.AppSocketPublisher;
 import org.bsl.portal.model.Department;
 import org.bsl.portal.model.Notice;
 import org.bsl.portal.model.User;
@@ -21,13 +22,13 @@ import java.beans.PropertyDescriptor;
 import java.lang.reflect.Method;
 import java.nio.file.*;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/notices")
@@ -41,6 +42,9 @@ public class NoticeController {
 
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private AppSocketPublisher appSocketPublisher;
 
     private static final int MAX_FILES = 5;
     private final String FILE_DIR = "files/";
@@ -122,6 +126,8 @@ public class NoticeController {
             notice.setUpdatedAt(now);
 
             Notice created = noticeService.create(notice);
+
+            appSocketPublisher.noticeChanged("CREATED", created.getId());
 
             return ResponseEntity.ok(created);
 
@@ -302,6 +308,8 @@ public class NoticeController {
 
             Notice updated = noticeService.update(id, updateData);
 
+            appSocketPublisher.noticeChanged("UPDATED", updated.getId());
+
             return ResponseEntity.ok(updated);
 
         } catch (Exception e) {
@@ -349,6 +357,8 @@ public class NoticeController {
             }
 
             noticeService.delete(id);
+
+            appSocketPublisher.noticeChanged("DELETED", id);
 
             return ResponseEntity.ok(Map.of("message", "Deleted successfully"));
 
@@ -398,6 +408,8 @@ public class NoticeController {
         }
 
         Notice updated = noticeService.pin(id, Boolean.TRUE.equals(pinned));
+
+        appSocketPublisher.noticeChanged("UPDATED", updated.getId());
 
         return ResponseEntity.ok(updated);
     }
@@ -705,15 +717,11 @@ public class NoticeController {
                 ? "file"
                 : Paths.get(originalName).getFileName().toString();
 
-        String fileName = System.currentTimeMillis()
-                + "_"
-                + UUID.randomUUID()
-                + "_"
-                + safeOriginalName;
-
         Path uploadDir = Paths.get(FILE_DIR).toAbsolutePath().normalize();
         Files.createDirectories(uploadDir);
 
+        String timeCode = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String fileName = buildTimeCodeFileName(uploadDir, safeOriginalName, timeCode);
         Path filePath = uploadDir.resolve(fileName).normalize();
 
         if (!filePath.startsWith(uploadDir)) {
@@ -723,6 +731,58 @@ public class NoticeController {
         Files.write(filePath, file.getBytes());
 
         return "/files/" + fileName;
+    }
+
+    private String buildTimeCodeFileName(Path uploadDir, String originalName, String timeCode) {
+        String cleanName = sanitizeFileName(originalName);
+        String baseName = getBaseName(cleanName);
+        String extension = getExtension(cleanName);
+
+        String fileName = baseName + "_" + timeCode + extension;
+        Path filePath = uploadDir.resolve(fileName).normalize();
+
+        int counter = 1;
+
+        while (Files.exists(filePath)) {
+            fileName = baseName + "_" + timeCode + "_" + counter + extension;
+            filePath = uploadDir.resolve(fileName).normalize();
+            counter++;
+        }
+
+        return fileName;
+    }
+
+    private String sanitizeFileName(String fileName) {
+        String cleanName = fileName == null || fileName.trim().isEmpty()
+                ? "file"
+                : fileName.trim();
+
+        cleanName = cleanName.replaceAll("[\\\\/:*?\"<>|]", "_");
+        cleanName = cleanName.replaceAll("\\s+", " ");
+
+        return cleanName.isBlank() ? "file" : cleanName;
+    }
+
+    private String getBaseName(String fileName) {
+        int dotIndex = fileName.lastIndexOf(".");
+
+        if (dotIndex <= 0) {
+            return fileName;
+        }
+
+        String baseName = fileName.substring(0, dotIndex).trim();
+
+        return baseName.isEmpty() ? "file" : baseName;
+    }
+
+    private String getExtension(String fileName) {
+        int dotIndex = fileName.lastIndexOf(".");
+
+        if (dotIndex < 0 || dotIndex == fileName.length() - 1) {
+            return "";
+        }
+
+        return fileName.substring(dotIndex);
     }
 
     private void deleteFileByUrl(String fileUrl) {

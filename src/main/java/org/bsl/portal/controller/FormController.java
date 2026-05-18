@@ -1,5 +1,6 @@
 package org.bsl.portal.controller;
 
+import org.bsl.portal.common.socket.AppSocketPublisher;
 import org.bsl.portal.dto.FormResponse;
 import org.bsl.portal.model.Department;
 import org.bsl.portal.model.DocumentType;
@@ -31,12 +32,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/forms")
@@ -53,6 +54,9 @@ class FormController {
 
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private AppSocketPublisher appSocketPublisher;
 
     private static final int MAX_FILES = 5;
     private final String FILE_DIR = "files/";
@@ -140,6 +144,8 @@ class FormController {
             item.setUpdatedAt(now);
 
             FormItem created = service.create(item);
+
+            appSocketPublisher.formChanged("CREATED", created.getId());
 
             return ResponseEntity.ok(created);
 
@@ -308,6 +314,8 @@ class FormController {
 
             FormItem updated = service.update(id, existing);
 
+            appSocketPublisher.formChanged("UPDATED", updated.getId());
+
             return ResponseEntity.ok(updated);
 
         } catch (Exception e) {
@@ -331,6 +339,8 @@ class FormController {
             }
 
             service.delete(id);
+
+            appSocketPublisher.formChanged("DELETED", id);
 
             return ResponseEntity.ok(Map.of("message", "Deleted successfully"));
 
@@ -624,16 +634,33 @@ class FormController {
                 ? "file"
                 : Paths.get(originalName).getFileName().toString();
 
-        String fileName = System.currentTimeMillis()
-                + "_"
-                + UUID.randomUUID()
-                + "_"
-                + safeOriginalName;
+        String cleanOriginalName = safeOriginalName
+                .replaceAll("[\\/:*?\"<>|]", "_")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        if (cleanOriginalName.isEmpty()) {
+            cleanOriginalName = "file";
+        }
+
+        int dotIndex = cleanOriginalName.lastIndexOf('.');
+        String baseName = dotIndex > 0 ? cleanOriginalName.substring(0, dotIndex) : cleanOriginalName;
+        String extension = dotIndex > 0 ? cleanOriginalName.substring(dotIndex) : "";
+
+        String timeCode = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String fileName = baseName + "_" + timeCode + extension;
 
         Path uploadDir = Paths.get(FILE_DIR).toAbsolutePath().normalize();
         Files.createDirectories(uploadDir);
 
         Path filePath = uploadDir.resolve(fileName).normalize();
+        int duplicateIndex = 1;
+
+        while (Files.exists(filePath)) {
+            fileName = baseName + "_" + timeCode + "_" + duplicateIndex + extension;
+            filePath = uploadDir.resolve(fileName).normalize();
+            duplicateIndex++;
+        }
 
         if (!filePath.startsWith(uploadDir)) {
             throw new SecurityException("Invalid file path");

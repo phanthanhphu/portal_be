@@ -1,5 +1,6 @@
 package org.bsl.portal.controller;
 
+import org.bsl.portal.common.socket.AppSocketPublisher;
 import org.bsl.portal.model.Department;
 import org.bsl.portal.model.User;
 import org.bsl.portal.service.*;
@@ -35,6 +36,9 @@ public class DepartmentController {
     @Autowired
     private DocumentTypeService documentTypeService;
 
+    @Autowired
+    private AppSocketPublisher appSocketPublisher;
+
     @PostMapping
     public ResponseEntity<?> create(@RequestParam String division, @RequestParam String departmentName) {
         try {
@@ -45,6 +49,7 @@ public class DepartmentController {
                 return ResponseEntity.badRequest().body(Map.of("status", 400, "message", "Department name is required"));
             }
             Department department = service.create(division, departmentName);
+            appSocketPublisher.departmentChanged("CREATED", department.getId());
             return ResponseEntity.ok(department);
         } catch (RuntimeException ex) {
             return ResponseEntity.badRequest().body(Map.of("status", 400, "message", ex.getMessage()));
@@ -79,6 +84,7 @@ public class DepartmentController {
             if (department == null) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("status", 404, "message", "Department not found"));
             }
+            appSocketPublisher.departmentChanged("UPDATED", department.getId());
             return ResponseEntity.ok(department);
         } catch (RuntimeException ex) {
             return ResponseEntity.badRequest().body(Map.of("status", 400, "message", ex.getMessage()));
@@ -139,6 +145,8 @@ public class DepartmentController {
             }
 
             service.delete(departmentId);
+
+            appSocketPublisher.departmentChanged("DELETED", departmentId);
 
             return ResponseEntity.ok(Map.of(
                     "status", 200,
@@ -225,12 +233,14 @@ public class DepartmentController {
         if (department == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("status", 404, "message", "Department not found"));
         }
+        appSocketPublisher.departmentChanged("UPDATED", department.getId());
         return ResponseEntity.ok(department);
     }
 
     @PostMapping("/notice-ids/sync")
     public ResponseEntity<?> syncNoticeIdsForAllDepartments() {
         List<Department> departments = service.syncNoticeIdsForAllDepartments();
+        appSocketPublisher.departmentChanged("UPDATED", "ALL");
         return ResponseEntity.ok(Map.of(
                 "status", 200,
                 "message", "Synced successfully",

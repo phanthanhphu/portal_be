@@ -84,7 +84,9 @@ public class SecurityConfig {
                                 "/users/get-swagger-token",      // tùy dự án
                                 "/api/**",
                                 "/files/**",
-                                "/uploads/**"
+                                "/uploads/**",
+                                "/ws/**"
+
                         ).permitAll()
 
                         // Tất cả các request còn lại PHẢI có token hợp lệ

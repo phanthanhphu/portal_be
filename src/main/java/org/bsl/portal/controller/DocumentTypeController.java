@@ -1,5 +1,6 @@
 package org.bsl.portal.controller;
 
+import org.bsl.portal.common.socket.AppSocketPublisher;
 import org.bsl.portal.model.DocumentType;
 import org.bsl.portal.service.DocumentTypeService;
 import org.bsl.portal.service.FormService;
@@ -22,11 +23,15 @@ public class DocumentTypeController {
     @Autowired
     private FormService formService;
 
+    @Autowired
+    private AppSocketPublisher appSocketPublisher;
+
     // ==================== CREATE TYPE ====================
     @PostMapping
     public ResponseEntity<?> create(@RequestBody DocumentType type) {
         try {
             DocumentType created = service.create(type);
+            appSocketPublisher.documentTypeChanged("CREATED", created.getId());
             return ResponseEntity.ok(created);
 
         } catch (IllegalArgumentException e) {
@@ -47,6 +52,7 @@ public class DocumentTypeController {
     ) {
         try {
             DocumentType updated = service.update(id, type);
+            appSocketPublisher.documentTypeChanged("UPDATED", updated.getId());
             return ResponseEntity.ok(updated);
 
         } catch (IllegalArgumentException e) {
@@ -68,6 +74,7 @@ public class DocumentTypeController {
     public ResponseEntity<?> delete(@PathVariable String id) {
         try {
             service.delete(id);
+            appSocketPublisher.documentTypeChanged("DELETED", id);
             return ResponseEntity.ok(Map.of("message", "Deleted successfully"));
 
         } catch (IllegalArgumentException e) {
@@ -150,6 +157,7 @@ public class DocumentTypeController {
     public ResponseEntity<?> syncDepartmentsByType(@PathVariable String id) {
         try {
             formService.syncDepartmentsForType(id);
+            appSocketPublisher.documentTypeChanged("UPDATED", id);
             return ResponseEntity.ok(Map.of("message", "Synced departments for document type successfully"));
 
         } catch (IllegalArgumentException e) {
@@ -172,6 +180,7 @@ public class DocumentTypeController {
     public ResponseEntity<?> syncAllDepartments() {
         try {
             formService.syncDepartmentsForAllTypes();
+            appSocketPublisher.documentTypeChanged("UPDATED", "ALL");
             return ResponseEntity.ok(Map.of("message", "Synced departments for all document types successfully"));
 
         } catch (Exception e) {

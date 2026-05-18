@@ -1,5 +1,6 @@
 package org.bsl.portal.controller;
 
+import org.bsl.portal.common.socket.AppSocketPublisher;
 import org.bsl.portal.model.AppLink;
 import org.bsl.portal.model.Department;
 import org.bsl.portal.model.User;
@@ -36,6 +37,9 @@ public class AppLinkController {
 
     @Autowired
     private DepartmentService departmentService;
+
+    @Autowired
+    private AppSocketPublisher appSocketPublisher;
 
     private static final String UPLOAD_DIR = "uploads/";
 
@@ -154,6 +158,8 @@ public class AppLinkController {
                     effectiveDepartmentId
             );
 
+            appSocketPublisher.appLinkChanged("CREATED", link.getId());
+
             return ResponseEntity.ok(toLinkResponse(link, admin, user.getDepartmentId()));
 
         } catch (Exception e) {
@@ -250,6 +256,8 @@ public class AppLinkController {
                     effectiveDepartmentId
             );
 
+            appSocketPublisher.appLinkChanged("UPDATED", updated.getId());
+
             return ResponseEntity.ok(toLinkResponse(updated, admin, user.getDepartmentId()));
 
         } catch (Exception e) {
@@ -296,6 +304,8 @@ public class AppLinkController {
             deleteImage(existing.getIcon());
 
             appLinkService.delete(id);
+
+            appSocketPublisher.appLinkChanged("DELETED", id);
 
             return ResponseEntity.ok(Map.of("message", "Deleted successfully"));
 

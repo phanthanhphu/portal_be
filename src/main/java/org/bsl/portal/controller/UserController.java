@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
+import org.bsl.portal.common.socket.AppSocketPublisher;
 import org.bsl.portal.dto.ChangePasswordDTO;
 import org.bsl.portal.dto.LoginDTO;
 import org.bsl.portal.dto.UserDTO;
@@ -63,6 +64,9 @@ public class UserController {
 
     @Autowired
     private DepartmentService departmentService;
+
+    @Autowired
+    private AppSocketPublisher appSocketPublisher;
 
     // 🔥 SWAGGER TOKENS - IN-MEMORY MAP!
     private final Map<String, String> swaggerTokens = new ConcurrentHashMap<>();
@@ -150,6 +154,8 @@ public class UserController {
             user.setCreatedAt(LocalDateTime.now());
 
             User savedUser = userService.saveUser(user);
+
+            appSocketPublisher.userChanged("CREATED", savedUser.getId());
 
             Map<String, Object> response = new HashMap<>();
             response.put("message", "User created successfully");
@@ -454,6 +460,8 @@ public class UserController {
 
             User updatedUser = userService.updateUser(id, user);
 
+            appSocketPublisher.userChanged("UPDATED", updatedUser.getId());
+
             Map<String, Object> response = new HashMap<>();
             response.put("message", "User updated successfully");
             response.put("data", buildUserResponse(updatedUser));
@@ -523,6 +531,8 @@ public class UserController {
             user.setPassword(passwordEncoder.encode(passwordRequest.getNewPassword()));
             userRepository.save(user);
 
+            appSocketPublisher.userChanged("UPDATED", user.getId());
+
             Map<String, String> response = new HashMap<>();
             response.put("message", "Password changed successfully");
             response.put("logoutMessage", "All your sessions have been logged out for security. Please login again.");
@@ -574,6 +584,8 @@ public class UserController {
 
             user.setPassword(passwordEncoder.encode(passwordRequest.getNewPassword()));
             userRepository.save(user);
+
+            appSocketPublisher.userChanged("UPDATED", user.getId());
 
             logger.info("Invalidated all tokens and sessions for user: {}", user.getEmail());
 
@@ -648,6 +660,8 @@ public class UserController {
             logger.info("All tokens invalidated for user: {}", user.getEmail());
 
             userService.deleteUser(id);
+
+            appSocketPublisher.userChanged("DELETED", id);
 
             return ResponseEntity.ok(Map.of(
                     "message", "User deleted successfully. Profile image removed. All sessions terminated."
