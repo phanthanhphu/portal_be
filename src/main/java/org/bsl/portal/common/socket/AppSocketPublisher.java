@@ -5,6 +5,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 @Component
 @RequiredArgsConstructor
@@ -46,5 +47,19 @@ public class AppSocketPublisher {
 
     public void userChanged(String action, String id) {
         publish("USER", action, id);
+    }
+
+    /*
+     * Added only for portal online count.
+     * Existing /topic/app-events logic is unchanged.
+     */
+    public void onlineCountChanged(int count) {
+        messagingTemplate.convertAndSend(
+                "/topic/presence/online-count",
+                Map.of(
+                        "onlineCount", count,
+                        "timestamp", LocalDateTime.now()
+                )
+        );
     }
 }
