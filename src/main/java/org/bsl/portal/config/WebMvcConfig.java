@@ -1,23 +1,28 @@
 package org.bsl.portal.config;
 
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
 @Configuration
-@EnableWebMvc
 public class WebMvcConfig implements WebMvcConfigurer {
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
 
-        // Map đường dẫn /uploads/** -> thư mục uploads ngoài project
-        registry.addResourceHandler("/uploads/**")
-                .addResourceLocations("file:uploads/");
+        Path uploadDir = Paths.get("uploads").toAbsolutePath().normalize();
+        Path filesDir = Paths.get("files").toAbsolutePath().normalize();
 
-        // Map đường dẫn /files/** -> thư mục files ngoài project
+        String uploadPath = uploadDir.toUri().toString();
+        String filesPath = filesDir.toUri().toString();
+
+        registry.addResourceHandler("/uploads/**")
+                .addResourceLocations(uploadPath);
+
         registry.addResourceHandler("/files/**")
-                .addResourceLocations("file:./files/");
+                .addResourceLocations(filesPath);
     }
 }
