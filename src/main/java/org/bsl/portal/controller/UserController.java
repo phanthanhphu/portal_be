@@ -44,7 +44,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 @RestController
-@RequestMapping("/users")
+@RequestMapping("/api/users")
 public class UserController {
 
     @Autowired
@@ -294,10 +294,10 @@ public class UserController {
             }
 
             // Nếu muốn bật lại check password thì mở đoạn dưới:
-            // if (!passwordEncoder.matches(loginRequest.getPassword(), user.getPassword())) {
-            //     return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-            //             .body(Map.of("message", "Invalid password"));
-            // }
+             if (!passwordEncoder.matches(loginRequest.getPassword(), user.getPassword())) {
+                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                         .body(Map.of("message", "Invalid password"));
+             }
 
             long tokenVersion = user.getTokenVersion();
             String token = jwtUtil.generateToken(user.getEmail(), user.getRole(), tokenVersion);

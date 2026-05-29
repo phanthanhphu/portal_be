@@ -107,10 +107,13 @@ public class SecurityConfig {
                 "http://10.232.132.65:3001",
                 "http://10.232.106.178:3001",
                 "http://10.232.100.68:3001",
-                "http://localhost:8081",
+                "http://10.232.132.19:8081",
                 "http://127.0.0.1:8081",
-                "http://127.0.0.1:3001"
-                // Nếu deploy production → thêm domain thật, ví dụ: "https://your-frontend.com"
+                "http://127.0.0.1:3001",
+                "http://10.232.132.19:3001",
+                "https://homepage.youngone.com.vn",
+                "https://homepage.youngone.com.vn:3001",
+                "https://homepage.youngone.com.vn:8081"
         ));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         configuration.setAllowedHeaders(List.of("*"));
