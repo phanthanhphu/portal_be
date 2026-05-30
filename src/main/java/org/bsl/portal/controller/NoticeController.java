@@ -708,10 +708,13 @@ public class NoticeController {
 
             if (includeFeaturedPinned) {
                 /*
-                 * Simple logic: get newest notices, filter pinned=true, take first 2.
-                 * This avoids returning null just because the second record in the page is not pinned.
+                 * Get newest approved pinned notices and return the first 2:
+                 * - featuredPinnedNotice: shown on the hero/banner pinned card
+                 * - priorityPinnedNotice: shown in the Notice panel priority pinned card
+                 *
+                 * Keep pinnedNotices as an array for FE that wants both items together.
                  */
-                Pageable pinnedLookupPageable = PageRequest.of(0, 200, newestSort);
+                Pageable pinnedLookupPageable = PageRequest.of(0, 1000, newestSort);
 
                 Page<NoticeResponse> pinnedLookupResult = noticeService.search(
                         filterDepartmentId,
@@ -798,10 +801,20 @@ public class NoticeController {
             int totalPages = Math.max(1, (int) Math.ceil((double) totalElements / safeSize));
 
             Map<String, Object> response = new HashMap<>();
-            // featuredPinnedNotice is now a list containing the 2 newest pinned notices.
-            // FE uses featuredPinnedNotice[0] for the hero/background pinned notice
-            // and featuredPinnedNotice[1] for the Notice panel Priority pinned card.
-            response.put("featuredPinnedNotice", pinnedNotices);
+            /*
+             * Backward-compatible pinned response:
+             * - featuredPinnedNotice: single object for the hero/banner pinned notice
+             * - priorityPinnedNotice: single object for the Notice panel priority pinned card
+             * - pinnedNotices: array containing both pinned notices, in display order
+             *
+             * Do not put the array into featuredPinnedNotice, because older FE code expects
+             * featuredPinnedNotice to be an object. Putting the array there can make the
+             * Priority pinned card disappear or make the hero card read the wrong shape.
+             */
+            response.put("featuredPinnedNotice", featuredPinnedNotice);
+            response.put("priorityPinnedNotice", priorityPinnedNotice);
+            response.put("pinnedNotices", pinnedNotices);
+            response.put("pinnedNoticeCount", pinnedNotices.size());
             response.put("content", responseContent);
             response.put("isAdmin", admin);
             response.put("currentDepartmentId", currentDepartmentId);
