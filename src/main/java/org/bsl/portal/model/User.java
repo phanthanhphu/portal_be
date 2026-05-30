@@ -1,7 +1,6 @@
 package org.bsl.portal.model;
 
 import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.mapping.DBRef;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.LocalDateTime;
@@ -19,9 +18,46 @@ public class User {
     private LocalDateTime createdAt;
     private String profileImageUrl;
     private boolean isEnabled;
-    private long tokenVersion; // Thêm trường tokenVersion
+    private long tokenVersion;
 
     private String departmentId;
+
+    /**
+     * Approval permission for non-admin users.
+     * Allowed values:
+     * - NONE: no approval permission
+     * - NOTICE: can approve notices
+     * - DOCUMENT: can approve documents
+     * - BOTH: can approve notices and documents
+     */
+    private String approvePermission = "NONE";
+
+    private String normalizeApprovePermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "NONE";
+        }
+
+        String normalized = value.trim().toUpperCase();
+
+        if ("NOTICE".equals(normalized)
+                || "DOCUMENT".equals(normalized)
+                || "BOTH".equals(normalized)
+                || "NONE".equals(normalized)) {
+            return normalized;
+        }
+
+        return "NONE";
+    }
+
+    public boolean canApproveNotice() {
+        String permission = normalizeApprovePermission(this.approvePermission);
+        return "NOTICE".equals(permission) || "BOTH".equals(permission);
+    }
+
+    public boolean canApproveDocument() {
+        String permission = normalizeApprovePermission(this.approvePermission);
+        return "DOCUMENT".equals(permission) || "BOTH".equals(permission);
+    }
 
     // Getters and setters
     public String getId() {
@@ -118,5 +154,13 @@ public class User {
 
     public void setDepartmentId(String departmentId) {
         this.departmentId = departmentId;
+    }
+
+    public String getApprovePermission() {
+        return normalizeApprovePermission(approvePermission);
+    }
+
+    public void setApprovePermission(String approvePermission) {
+        this.approvePermission = normalizeApprovePermission(approvePermission);
     }
 }

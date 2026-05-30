@@ -47,6 +47,11 @@ public class NoticeController {
     private AppSocketPublisher appSocketPublisher;
 
     private static final int MAX_FILES = 5;
+    private static final String STATUS_PENDING = "PENDING";
+    private static final String STATUS_APPROVED = "APPROVED";
+    private static final String STATUS_REJECTED = "REJECTED";
+    private static final String STATUS_ALL = "ALL";
+
     private final String FILE_DIR = "files/";
 
     // CREATE NOTICE
@@ -122,6 +127,19 @@ public class NoticeController {
             syncFileFields(notice, savedFileUrls);
 
             LocalDateTime now = LocalDateTime.now();
+
+            // Approval workflow:
+            // - Admin tạo bài: duyệt luôn để hiện ngoài index.
+            // - User thường tạo bài: chờ admin duyệt, chưa hiện ngoài index.
+            // Every new notice must go through approval, including notices created by Admin.
+            String initialStatus = STATUS_PENDING;
+            notice.setStatus(initialStatus);
+
+            if (STATUS_APPROVED.equals(initialStatus)) {
+                notice.setApprovedBy(userId.trim());
+                notice.setApprovedAt(now);
+            }
+
             notice.setCreatedAt(now);
             notice.setUpdatedAt(now);
 
@@ -306,6 +324,27 @@ public class NoticeController {
             updateData.setPinned(pinned != null ? pinned : Boolean.TRUE.equals(existing.getPinned()));
             syncFileFields(updateData, currentFileUrls);
 
+            String nextStatus = normalizeApprovalStatus(existing.getStatus());
+
+            // Nếu user thường sửa bài, bài cần quay lại trạng thái chờ duyệt.
+            // Admin sửa bài thì giữ trạng thái hiện tại.
+            if (user != null && !admin) {
+                nextStatus = STATUS_PENDING;
+                updateData.setApprovedBy(null);
+                updateData.setApprovedAt(null);
+                updateData.setRejectedBy(null);
+                updateData.setRejectedAt(null);
+                updateData.setRejectReason(null);
+            } else {
+                updateData.setApprovedBy(existing.getApprovedBy());
+                updateData.setApprovedAt(existing.getApprovedAt());
+                updateData.setRejectedBy(existing.getRejectedBy());
+                updateData.setRejectedAt(existing.getRejectedAt());
+                updateData.setRejectReason(existing.getRejectReason());
+            }
+
+            updateData.setStatus(nextStatus);
+
             Notice updated = noticeService.update(id, updateData);
 
             appSocketPublisher.noticeChanged("UPDATED", updated.getId());
@@ -414,6 +453,203 @@ public class NoticeController {
         return ResponseEntity.ok(updated);
     }
 
+    // APPROVE NOTICE
+    @PatchMapping("/{id}/approve")
+    public ResponseEntity<?> approve(
+            @PathVariable String id,
+            @RequestParam String userId) {
+
+        try {
+            Notice existing = noticeService.getById(id);
+
+            if (existing == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Notice not found"));
+            }
+
+            User adminUser = getUserOrNull(userId);
+
+            if (adminUser == null) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+            }
+
+            if (!isAdmin(adminUser)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "Only admin can approve notice"));
+            }
+
+            LocalDateTime now = LocalDateTime.now();
+
+            existing.setStatus(STATUS_APPROVED);
+            existing.setApprovedBy(userId.trim());
+            existing.setApprovedAt(now);
+
+            existing.setRejectedBy(null);
+            existing.setRejectedAt(null);
+            existing.setRejectReason(null);
+
+            existing.setUpdatedAt(now);
+
+            Notice updated = noticeService.save(existing);
+
+            appSocketPublisher.noticeChanged("APPROVED", updated.getId());
+
+            return ResponseEntity.ok(updated);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Approve failed: " + e.getMessage()));
+        }
+    }
+
+    // REJECT NOTICE
+    @PatchMapping("/{id}/reject")
+    public ResponseEntity<?> reject(
+            @PathVariable String id,
+            @RequestParam String userId,
+            @RequestBody(required = false) Map<String, String> body) {
+
+        try {
+            Notice existing = noticeService.getById(id);
+
+            if (existing == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Notice not found"));
+            }
+
+            User adminUser = getUserOrNull(userId);
+
+            if (adminUser == null) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+            }
+
+            if (!isAdmin(adminUser)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "Only admin can reject notice"));
+            }
+
+            String reason = body != null ? body.getOrDefault("reason", "") : "";
+            LocalDateTime now = LocalDateTime.now();
+
+            existing.setStatus(STATUS_REJECTED);
+            existing.setRejectedBy(userId.trim());
+            existing.setRejectedAt(now);
+            existing.setRejectReason(reason != null ? reason.trim() : "");
+
+            existing.setApprovedBy(null);
+            existing.setApprovedAt(null);
+
+            existing.setUpdatedAt(now);
+
+            Notice updated = noticeService.save(existing);
+
+            appSocketPublisher.noticeChanged("REJECTED", updated.getId());
+
+            return ResponseEntity.ok(updated);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Reject failed: " + e.getMessage()));
+        }
+    }
+
+
+    // CHANGE NOTICE STATUS
+    @PatchMapping("/{id}/status")
+    public ResponseEntity<?> changeStatus(
+            @PathVariable String id,
+            @RequestParam String userId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String reason,
+            @RequestBody(required = false) Map<String, String> body) {
+
+        try {
+            Notice existing = noticeService.getById(id);
+
+            if (existing == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Notice not found"));
+            }
+
+            User adminUser = getUserOrNull(userId);
+
+            if (adminUser == null) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+            }
+
+            if (!isAdmin(adminUser)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "Only admin can change notice status"));
+            }
+
+            String requestedStatus = status;
+            String rejectReason = reason;
+
+            if (body != null) {
+                if (body.get("status") != null) {
+                    requestedStatus = body.get("status");
+                }
+
+                if (body.get("reason") != null) {
+                    rejectReason = body.get("reason");
+                }
+            }
+
+            String nextStatus = normalizeApprovalStatusFilter(requestedStatus);
+
+            if (STATUS_ALL.equals(nextStatus)) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Invalid notice status"));
+            }
+
+            if (STATUS_REJECTED.equals(nextStatus)
+                    && (rejectReason == null || rejectReason.trim().isEmpty())) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Reject reason is required"));
+            }
+
+            LocalDateTime now = LocalDateTime.now();
+
+            if (STATUS_PENDING.equals(nextStatus)) {
+                existing.setStatus(STATUS_PENDING);
+                existing.setApprovedBy(null);
+                existing.setApprovedAt(null);
+                existing.setRejectedBy(null);
+                existing.setRejectedAt(null);
+                existing.setRejectReason(null);
+            } else if (STATUS_APPROVED.equals(nextStatus)) {
+                existing.setStatus(STATUS_APPROVED);
+                existing.setApprovedBy(userId.trim());
+                existing.setApprovedAt(now);
+                existing.setRejectedBy(null);
+                existing.setRejectedAt(null);
+                existing.setRejectReason(null);
+            } else if (STATUS_REJECTED.equals(nextStatus)) {
+                existing.setStatus(STATUS_REJECTED);
+                existing.setRejectedBy(userId.trim());
+                existing.setRejectedAt(now);
+                existing.setRejectReason(rejectReason.trim());
+                existing.setApprovedBy(null);
+                existing.setApprovedAt(null);
+            }
+
+            existing.setUpdatedAt(now);
+
+            Notice updated = noticeService.save(existing);
+
+            appSocketPublisher.noticeChanged(nextStatus, updated.getId());
+
+            return ResponseEntity.ok(updated);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Change status failed: " + e.getMessage()));
+        }
+    }
+
     @GetMapping("/search")
     public ResponseEntity<?> search(
             @RequestParam(required = false) String userId,
@@ -423,6 +659,7 @@ public class NoticeController {
             @RequestParam(required = false) String departmentName,
             @RequestParam(required = false) String title,
             @RequestParam(required = false) String content,
+            @RequestParam(defaultValue = "APPROVED") String status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
@@ -430,6 +667,7 @@ public class NoticeController {
             boolean admin = false;
             String currentDepartmentId = null;
             String filterDepartmentId = null;
+            String normalizedStatusFilter = normalizeApprovalStatusFilter(status);
 
             if (userId != null && !userId.trim().isEmpty()) {
                 Optional<User> userOpt = userService.findById(userId.trim());
@@ -487,6 +725,10 @@ public class NoticeController {
                 for (NoticeResponse notice : pinnedLookupResult.getContent()) {
                     Map<String, Object> noticeMap = toNoticeResponseMap(notice, admin, currentDepartmentId);
 
+                    if (!matchesApprovalStatus(noticeMap, normalizedStatusFilter)) {
+                        continue;
+                    }
+
                     if (!Boolean.TRUE.equals(noticeMap.get("pinned"))) {
                         continue;
                     }
@@ -535,6 +777,10 @@ public class NoticeController {
                 Map<String, Object> noticeMap = toNoticeResponseMap(notice, admin, currentDepartmentId);
                 String noticeId = getStringValue(noticeMap.get("id"));
 
+                if (!matchesApprovalStatus(noticeMap, normalizedStatusFilter)) {
+                    continue;
+                }
+
                 if (Objects.equals(featuredPinnedNoticeId, noticeId)
                         || Objects.equals(priorityPinnedNoticeId, noticeId)) {
                     continue;
@@ -548,8 +794,8 @@ public class NoticeController {
 
             ArrayList<Map<String, Object>> responseContent = new ArrayList<>(filteredContent.subList(fromIndex, toIndex));
 
-            long totalElements = Math.max(result.getTotalElements() - pinnedNotices.size(), 0);
-            int totalPages = (int) Math.ceil((double) totalElements / safeSize);
+            long totalElements = filteredContent.size();
+            int totalPages = Math.max(1, (int) Math.ceil((double) totalElements / safeSize));
 
             Map<String, Object> response = new HashMap<>();
             // featuredPinnedNotice is now a list containing the 2 newest pinned notices.
@@ -561,6 +807,7 @@ public class NoticeController {
             response.put("currentDepartmentId", currentDepartmentId);
             response.put("skipDepartmentFilter", skipDepartmentFilter);
             response.put("includeFeaturedPinned", includeFeaturedPinned);
+            response.put("status", normalizedStatusFilter);
             response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
             response.put("totalElements", totalElements);
             response.put("totalPages", totalPages);
@@ -601,6 +848,17 @@ public class NoticeController {
 
         if (noticeId != null && !noticeId.trim().isEmpty()) {
             fullNotice = noticeService.getById(noticeId.trim());
+        }
+
+        if (fullNotice != null) {
+            map.put("status", normalizeApprovalStatus(fullNotice.getStatus()));
+            map.put("approvedBy", fullNotice.getApprovedBy());
+            map.put("approvedAt", fullNotice.getApprovedAt());
+            map.put("rejectedBy", fullNotice.getRejectedBy());
+            map.put("rejectedAt", fullNotice.getRejectedAt());
+            map.put("rejectReason", fullNotice.getRejectReason());
+        } else {
+            map.put("status", normalizeApprovalStatus(map.get("status")));
         }
 
         List<String> fileUrls = new ArrayList<>();
@@ -871,6 +1129,51 @@ public class NoticeController {
         }
 
         return currentDepartmentId.trim().equals(noticeDepartmentId.trim());
+    }
+
+    private String normalizeApprovalStatus(Object value) {
+        if (value == null) {
+            // Dữ liệu cũ chưa có status thì xem như đã duyệt,
+            // tránh làm mất bài cũ ngoài trang index.
+            return STATUS_APPROVED;
+        }
+
+        String status = String.valueOf(value).trim().toUpperCase();
+
+        if (STATUS_PENDING.equals(status)
+                || STATUS_APPROVED.equals(status)
+                || STATUS_REJECTED.equals(status)) {
+            return status;
+        }
+
+        return STATUS_APPROVED;
+    }
+
+    private String normalizeApprovalStatusFilter(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return STATUS_APPROVED;
+        }
+
+        String status = value.trim().toUpperCase();
+
+        if (STATUS_ALL.equals(status)
+                || STATUS_PENDING.equals(status)
+                || STATUS_APPROVED.equals(status)
+                || STATUS_REJECTED.equals(status)) {
+            return status;
+        }
+
+        return STATUS_APPROVED;
+    }
+
+    private boolean matchesApprovalStatus(Map<String, Object> noticeMap, String statusFilter) {
+        if (STATUS_ALL.equals(statusFilter)) {
+            return true;
+        }
+
+        String itemStatus = normalizeApprovalStatus(noticeMap.get("status"));
+
+        return statusFilter.equals(itemStatus);
     }
 
     private boolean isAdmin(User user) {

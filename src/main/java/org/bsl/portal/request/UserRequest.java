@@ -3,6 +3,11 @@ package org.bsl.portal.request;
 import org.springframework.web.multipart.MultipartFile;
 
 public class UserRequest {
+    public static final String APPROVE_NONE = "NONE";
+    public static final String APPROVE_NOTICE = "NOTICE";
+    public static final String APPROVE_DOCUMENT = "DOCUMENT";
+    public static final String APPROVE_BOTH = "BOTH";
+
     private String username;
     private String email;
     private String password;
@@ -11,7 +16,44 @@ public class UserRequest {
     private String role;
     private Boolean isEnabled;
     private String departmentId;
+
+    /**
+     * Permission for approval features.
+     * NONE     = cannot approve anything
+     * NOTICE   = can approve notices only
+     * DOCUMENT = can approve documents only
+     * BOTH     = can approve both notices and documents
+     */
+    private String approvePermission = APPROVE_NONE;
+
     private MultipartFile profileImage;
+
+    private String normalizeApprovePermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return APPROVE_NONE;
+        }
+
+        String normalized = value.trim().toUpperCase();
+
+        if (APPROVE_NOTICE.equals(normalized)
+                || APPROVE_DOCUMENT.equals(normalized)
+                || APPROVE_BOTH.equals(normalized)
+                || APPROVE_NONE.equals(normalized)) {
+            return normalized;
+        }
+
+        return APPROVE_NONE;
+    }
+
+    public boolean canApproveNotice() {
+        String permission = normalizeApprovePermission(this.approvePermission);
+        return APPROVE_NOTICE.equals(permission) || APPROVE_BOTH.equals(permission);
+    }
+
+    public boolean canApproveDocument() {
+        String permission = normalizeApprovePermission(this.approvePermission);
+        return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
+    }
 
     // Getters and Setters
     public String getUsername() {
@@ -76,6 +118,14 @@ public class UserRequest {
 
     public void setDepartmentId(String departmentId) {
         this.departmentId = departmentId;
+    }
+
+    public String getApprovePermission() {
+        return normalizeApprovePermission(approvePermission);
+    }
+
+    public void setApprovePermission(String approvePermission) {
+        this.approvePermission = normalizeApprovePermission(approvePermission);
     }
 
     public MultipartFile getProfileImage() {

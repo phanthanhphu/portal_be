@@ -30,6 +30,23 @@ public class FormItem {
     private List<String> fileUrls = new ArrayList<>();
     private List<String> previewUrls = new ArrayList<>();
 
+    /**
+     * Approval workflow for Document/Form approval page.
+     *
+     * PENDING  : tài liệu mới tạo, chờ duyệt
+     * APPROVED : tài liệu đã duyệt, được hiển thị/sử dụng chính thức
+     * REJECTED : tài liệu bị từ chối, có thể kèm lý do
+     *
+     * Default APPROVED giúp dữ liệu cũ chưa có status vẫn hoạt động bình thường.
+     * Khi tạo tài liệu mới, Controller có thể setStatus("PENDING").
+     */
+    private String status = "APPROVED";
+    private String approvedBy;
+    private LocalDateTime approvedAt;
+    private String rejectedBy;
+    private LocalDateTime rejectedAt;
+    private String rejectReason;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -161,6 +178,22 @@ public class FormItem {
         }
     }
 
+    private String normalizeStatus(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "APPROVED";
+        }
+
+        String normalized = value.trim().toUpperCase();
+
+        if ("PENDING".equals(normalized)
+                || "APPROVED".equals(normalized)
+                || "REJECTED".equals(normalized)) {
+            return normalized;
+        }
+
+        return "APPROVED";
+    }
+
     public String getId() {
         return id;
     }
@@ -201,6 +234,30 @@ public class FormItem {
     public List<String> getPreviewUrls() {
         syncListFromSingleFile();
         return previewUrls;
+    }
+
+    public String getStatus() {
+        return normalizeStatus(status);
+    }
+
+    public String getApprovedBy() {
+        return approvedBy;
+    }
+
+    public LocalDateTime getApprovedAt() {
+        return approvedAt;
+    }
+
+    public String getRejectedBy() {
+        return rejectedBy;
+    }
+
+    public LocalDateTime getRejectedAt() {
+        return rejectedAt;
+    }
+
+    public String getRejectReason() {
+        return rejectReason;
     }
 
     public LocalDateTime getCreatedAt() {
@@ -267,6 +324,30 @@ public class FormItem {
     public void setPreviewUrls(List<String> previewUrls) {
         this.previewUrls = cleanUrls(previewUrls);
         syncSingleFileFromList();
+    }
+
+    public void setStatus(String status) {
+        this.status = normalizeStatus(status);
+    }
+
+    public void setApprovedBy(String approvedBy) {
+        this.approvedBy = approvedBy;
+    }
+
+    public void setApprovedAt(LocalDateTime approvedAt) {
+        this.approvedAt = approvedAt;
+    }
+
+    public void setRejectedBy(String rejectedBy) {
+        this.rejectedBy = rejectedBy;
+    }
+
+    public void setRejectedAt(LocalDateTime rejectedAt) {
+        this.rejectedAt = rejectedAt;
+    }
+
+    public void setRejectReason(String rejectReason) {
+        this.rejectReason = rejectReason;
     }
 
     public void setCreatedAt(LocalDateTime createdAt) {

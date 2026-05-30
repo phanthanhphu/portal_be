@@ -21,6 +21,11 @@ import java.util.stream.Collectors;
 @Service
 public class NoticeService {
 
+    private static final String STATUS_PENDING = "PENDING";
+    private static final String STATUS_APPROVED = "APPROVED";
+    private static final String STATUS_REJECTED = "REJECTED";
+    private static final String STATUS_ALL = "ALL";
+
     @Autowired
     private NoticeRepository repository;
 
@@ -38,6 +43,14 @@ public class NoticeService {
         notice.setCreatedAt(now);
         notice.setUpdatedAt(now);
 
+        // Nếu controller chưa set status thì mặc định APPROVED để không làm mất dữ liệu cũ.
+        // Controller mới sẽ set user thường = PENDING, admin = APPROVED.
+        if (!StringUtils.hasText(notice.getStatus())) {
+            notice.setStatus(STATUS_APPROVED);
+        } else {
+            notice.setStatus(normalizeApprovalStatus(notice.getStatus()));
+        }
+
         Notice created = repository.save(notice);
 
         // Add notice id vào department.noticeIds sau khi MongoDB đã tạo id.
@@ -47,6 +60,35 @@ public class NoticeService {
         );
 
         return created;
+    }
+
+    // SAVE DIRECTLY
+    // Dùng cho approve/reject trong NoticeController.
+    public Notice save(Notice notice) {
+        if (notice == null) {
+            return null;
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+
+        if (notice.getCreatedAt() == null) {
+            notice.setCreatedAt(now);
+        }
+
+        notice.setUpdatedAt(now);
+
+        if (!StringUtils.hasText(notice.getStatus())) {
+            notice.setStatus(STATUS_APPROVED);
+        } else {
+            notice.setStatus(normalizeApprovalStatus(notice.getStatus()));
+        }
+
+        Notice saved = repository.save(notice);
+
+        // Đảm bảo dữ liệu cũ hoặc notice vừa save vẫn được gắn vào department.
+        departmentService.addNoticeToDepartment(saved.getDepartmentId(), saved.getId());
+
+        return saved;
     }
 
     // UPDATE
@@ -84,6 +126,19 @@ public class NoticeService {
         notice.setPinned(data.getPinned());
         notice.setUserId(data.getUserId());
         notice.setDepartmentId(data.getDepartmentId());
+
+        /*
+         * Không đổi status ở update thường.
+         * Approve/reject phải đi qua API riêng:
+         * PATCH /api/notices/{id}/approve
+         * PATCH /api/notices/{id}/reject
+         */
+        if (!StringUtils.hasText(notice.getStatus())) {
+            notice.setStatus(STATUS_APPROVED);
+        } else {
+            notice.setStatus(normalizeApprovalStatus(notice.getStatus()));
+        }
+
         notice.setUpdatedAt(LocalDateTime.now());
 
         Notice updated = repository.save(notice);
@@ -133,6 +188,7 @@ public class NoticeService {
         return repository.findAll(pageable);
     }
 
+    // Search cũ: giữ lại để không làm lỗi code đang gọi hiện tại.
     public Page<NoticeResponse> search(
             String departmentId,
             String division,
@@ -141,12 +197,34 @@ public class NoticeService {
             String content,
             Pageable pageable
     ) {
+        return search(
+                departmentId,
+                division,
+                departmentName,
+                title,
+                content,
+                STATUS_ALL,
+                pageable
+        );
+    }
+
+    // Search mới: hỗ trợ lọc trạng thái duyệt bài.
+    public Page<NoticeResponse> search(
+            String departmentId,
+            String division,
+            String departmentName,
+            String title,
+            String content,
+            String status,
+            Pageable pageable
+    ) {
         Query query = buildSearchQuery(
                 departmentId,
                 division,
                 departmentName,
                 title,
-                content
+                content,
+                status
         );
 
         if (query == null) {
@@ -167,6 +245,7 @@ public class NoticeService {
         return new PageImpl<>(contentList, pageable, total);
     }
 
+    // Latest pinned cũ: mặc định chỉ lấy APPROVED để bài pending không hiện ngoài index.
     public NoticeResponse getLatestPinnedNotice(
             String departmentId,
             String division,
@@ -174,12 +253,31 @@ public class NoticeService {
             String title,
             String content
     ) {
+        return getLatestPinnedNotice(
+                departmentId,
+                division,
+                departmentName,
+                title,
+                content,
+                STATUS_APPROVED
+        );
+    }
+
+    public NoticeResponse getLatestPinnedNotice(
+            String departmentId,
+            String division,
+            String departmentName,
+            String title,
+            String content,
+            String status
+    ) {
         Query query = buildSearchQuery(
                 departmentId,
                 division,
                 departmentName,
                 title,
-                content
+                content,
+                status
         );
 
         if (query == null) {
@@ -198,6 +296,7 @@ public class NoticeService {
         return notice == null ? null : toNoticeResponse(notice);
     }
 
+    // Search excluding cũ: giữ lại để không làm lỗi code đang gọi hiện tại.
     public Page<NoticeResponse> searchExcludingNoticeId(
             String departmentId,
             String division,
@@ -207,12 +306,35 @@ public class NoticeService {
             String excludeNoticeId,
             Pageable pageable
     ) {
+        return searchExcludingNoticeId(
+                departmentId,
+                division,
+                departmentName,
+                title,
+                content,
+                excludeNoticeId,
+                STATUS_ALL,
+                pageable
+        );
+    }
+
+    public Page<NoticeResponse> searchExcludingNoticeId(
+            String departmentId,
+            String division,
+            String departmentName,
+            String title,
+            String content,
+            String excludeNoticeId,
+            String status,
+            Pageable pageable
+    ) {
         Query query = buildSearchQuery(
                 departmentId,
                 division,
                 departmentName,
                 title,
-                content
+                content,
+                status
         );
 
         if (query == null) {
@@ -243,6 +365,24 @@ public class NoticeService {
             String departmentName,
             String title,
             String content
+    ) {
+        return buildSearchQuery(
+                departmentId,
+                division,
+                departmentName,
+                title,
+                content,
+                STATUS_ALL
+        );
+    }
+
+    private Query buildSearchQuery(
+            String departmentId,
+            String division,
+            String departmentName,
+            String title,
+            String content,
+            String status
     ) {
         List<String> effectiveDepartmentIds = null;
 
@@ -294,6 +434,11 @@ public class NoticeService {
             andCriterias.add(Criteria.where("content").regex(content.trim(), "i"));
         }
 
+        Criteria statusCriteria = buildStatusCriteria(status);
+        if (statusCriteria != null) {
+            andCriterias.add(statusCriteria);
+        }
+
         if (!andCriterias.isEmpty()) {
             query.addCriteria(new Criteria().andOperator(
                     andCriterias.toArray(new Criteria[0])
@@ -331,6 +476,58 @@ public class NoticeService {
         return response;
     }
 
+    private Criteria buildStatusCriteria(String status) {
+        String normalizedStatus = normalizeApprovalStatusFilter(status);
+
+        if (STATUS_ALL.equals(normalizedStatus)) {
+            return null;
+        }
+
+        if (STATUS_APPROVED.equals(normalizedStatus)) {
+            // Dữ liệu cũ chưa có field status vẫn được xem là APPROVED.
+            return new Criteria().orOperator(
+                    Criteria.where("status").is(STATUS_APPROVED),
+                    Criteria.where("status").exists(false),
+                    Criteria.where("status").is(null),
+                    Criteria.where("status").is("")
+            );
+        }
+
+        return Criteria.where("status").is(normalizedStatus);
+    }
+
+    private String normalizeApprovalStatus(Object value) {
+        if (value == null) {
+            return STATUS_APPROVED;
+        }
+
+        String status = String.valueOf(value).trim().toUpperCase();
+
+        if (STATUS_PENDING.equals(status)
+                || STATUS_APPROVED.equals(status)
+                || STATUS_REJECTED.equals(status)) {
+            return status;
+        }
+
+        return STATUS_APPROVED;
+    }
+
+    private String normalizeApprovalStatusFilter(String value) {
+        if (!StringUtils.hasText(value)) {
+            return STATUS_APPROVED;
+        }
+
+        String status = value.trim().toUpperCase();
+
+        if (STATUS_ALL.equals(status)
+                || STATUS_PENDING.equals(status)
+                || STATUS_APPROVED.equals(status)
+                || STATUS_REJECTED.equals(status)) {
+            return status;
+        }
+
+        return STATUS_APPROVED;
+    }
 
     private List<String> cleanUrls(List<String> urls) {
         List<String> result = new ArrayList<>();
@@ -359,6 +556,12 @@ public class NoticeService {
 
         notice.setPinned(pinned);
         notice.setUpdatedAt(LocalDateTime.now());
+
+        if (!StringUtils.hasText(notice.getStatus())) {
+            notice.setStatus(STATUS_APPROVED);
+        } else {
+            notice.setStatus(normalizeApprovalStatus(notice.getStatus()));
+        }
 
         Notice updated = repository.save(notice);
 

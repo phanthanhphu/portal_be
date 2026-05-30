@@ -5,14 +5,16 @@ import org.bsl.portal.model.User;
 import org.bsl.portal.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.support.PageableExecutionUtils;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -20,118 +22,222 @@ import java.util.stream.Collectors;
 @Service
 public class UserService {
 
+    private static final String APPROVE_NONE = "NONE";
+    private static final String APPROVE_NOTICE = "NOTICE";
+    private static final String APPROVE_DOCUMENT = "DOCUMENT";
+    private static final String APPROVE_BOTH = "BOTH";
+
     @Autowired
     private UserRepository userRepository;
 
     @Autowired
-    private PasswordEncoder passwordEncoder;
-
-    @Autowired
     private MongoTemplate mongoTemplate;
 
-    public Optional<User> findByEmail(String email) {
-        return userRepository.findByEmail(email);
+    public User saveUser(User user) {
+        if (user.getId() == null || user.getId().trim().isEmpty()) {
+            user.setCreatedAt(LocalDateTime.now());
+        }
+
+        user.setApprovePermission(normalizeApprovePermission(user.getApprovePermission()));
+        return userRepository.save(user);
     }
 
     public Optional<User> findById(String id) {
         return userRepository.findById(id);
     }
 
-    public User saveUser(User user) {
-        user.setPassword(passwordEncoder.encode(user.getPassword()));
-        return userRepository.save(user);
-    }
-
-    public boolean validatePassword(String rawPassword, String encodedPassword) {
-        return passwordEncoder.matches(rawPassword, encodedPassword);
-    }
-
-    public User updateUser(String id, User user) {
-        Optional<User> existingUserOpt = userRepository.findById(id);
-        if (!existingUserOpt.isPresent()) {
-            throw new RuntimeException("User not found with ID: " + id);
-        }
-        User existingUser = existingUserOpt.get();
-        existingUser.setUsername(user.getUsername());
-        existingUser.setEmail(user.getEmail());
-        existingUser.setAddress(user.getAddress());
-        existingUser.setPhone(user.getPhone());
-        existingUser.setRole(user.getRole());
-        existingUser.setProfileImageUrl(user.getProfileImageUrl());
-        existingUser.setCreatedAt(user.getCreatedAt());
-        existingUser.setTokenVersion(user.getTokenVersion());
-        existingUser.setEnabled(user.isEnabled());
-        existingUser.setDepartmentId(user.getDepartmentId());
-        return userRepository.save(existingUser);
-    }
-
-    public boolean changePassword(String email, String oldPassword, String newPassword) {
-        if (email == null || email.trim().isEmpty()) {
-            System.out.println("Email is null or empty");
-            return false;
-        }
-        System.out.println("ChangePassword called with email: " + email + ", oldPassword: " + oldPassword);
-        Optional<User> userOpt = userRepository.findByEmail(email.toLowerCase());
-        if (!userOpt.isPresent()) {
-            System.out.println("User not found for email: " + email);
-            return false;
-        }
-        User user = userOpt.get();
-        System.out.println("Stored hashed password: " + user.getPassword());
-        boolean passwordMatch = passwordEncoder.matches(oldPassword, user.getPassword());
-        System.out.println("Password match result: " + passwordMatch);
-        if (passwordMatch) {
-            user.setPassword(passwordEncoder.encode(newPassword));
-            userRepository.save(user);
-            System.out.println("Password updated for user: " + email);
-            return true;
-        }
-        return false;
+    public Optional<User> findByEmail(String email) {
+        return userRepository.findByEmail(email);
     }
 
     public void deleteUser(String id) {
         userRepository.deleteById(id);
     }
 
-    public Page<UserDTO> filterUsers(String username, String address, String phone, String email, String role, Pageable pageable) {
-        Query query = new Query().with(pageable);
+    public User updateUser(String id, User data) {
+        Optional<User> optional = userRepository.findById(id);
 
-        // Add filtering criteria if provided
-        if (username != null && !username.isEmpty()) {
-            query.addCriteria(Criteria.where("username").regex(username, "i"));
-        }
-        if (address != null && !address.isEmpty()) {
-            query.addCriteria(Criteria.where("address").regex(address, "i"));
-        }
-        if (phone != null && !phone.isEmpty()) {
-            query.addCriteria(Criteria.where("phone").regex(phone, "i"));
-        }
-        if (email != null && !email.isEmpty()) {
-            query.addCriteria(Criteria.where("email").regex(email, "i"));
-        }
-        if (role != null && !role.isEmpty()) {
-            query.addCriteria(Criteria.where("role").is(role));
+        if (optional.isEmpty()) {
+            return null;
         }
 
-        List<User> users = mongoTemplate.find(query, User.class);
-        List<UserDTO> userDTOs = users.stream().map(user -> {
-            UserDTO dto = new UserDTO();
-            dto.setId(user.getId());
-            dto.setUsername(user.getUsername());
-            dto.setEmail(user.getEmail());
-            dto.setAddress(user.getAddress());
-            dto.setPhone(user.getPhone());
-            dto.setRole(user.getRole());
-            dto.setProfileImageUrl(user.getProfileImageUrl());
-            dto.setCreatedAt(user.getCreatedAt());
-            dto.setEnabled(user.isEnabled());
-            dto.setDepartmentId(user.getDepartmentId());
-            return dto;
-        }).collect(Collectors.toList());
+        User existing = optional.get();
 
-        long total = mongoTemplate.count(query.skip(0).limit(0), User.class);
-        return PageableExecutionUtils.getPage(userDTOs, pageable, () -> total);
+        existing.setUsername(data.getUsername());
+        existing.setEmail(data.getEmail());
+        existing.setAddress(data.getAddress());
+        existing.setPhone(data.getPhone());
+        existing.setRole(data.getRole());
+        existing.setDepartmentId(data.getDepartmentId());
+        existing.setEnabled(data.isEnabled());
+        existing.setTokenVersion(data.getTokenVersion() > 0 ? data.getTokenVersion() : existing.getTokenVersion());
+        existing.setProfileImageUrl(data.getProfileImageUrl());
+
+        /*
+         * IMPORTANT:
+         * This line is the fix for "Approve Permission changes but does not save".
+         * The controller already receives approvePermission and passes it in User data,
+         * but the service must copy it onto the existing persistent user before save().
+         */
+        existing.setApprovePermission(normalizeApprovePermission(data.getApprovePermission()));
+
+        if (existing.getCreatedAt() == null) {
+            existing.setCreatedAt(data.getCreatedAt() != null ? data.getCreatedAt() : LocalDateTime.now());
+        }
+
+        return userRepository.save(existing);
     }
 
+    public Page<UserDTO> filterUsers(
+            String username,
+            String address,
+            String phone,
+            String email,
+            String role,
+            Pageable pageable
+    ) {
+        return filterUsers(username, address, phone, email, role, "", pageable);
+    }
 
+    public Page<UserDTO> filterUsers(
+            String username,
+            String address,
+            String phone,
+            String email,
+            String role,
+            String approvePermission,
+            Pageable pageable
+    ) {
+        Query query = new Query();
+        List<Criteria> andCriterias = new ArrayList<>();
+
+        if (StringUtils.hasText(username)) {
+            andCriterias.add(Criteria.where("username").regex(username.trim(), "i"));
+        }
+
+        if (StringUtils.hasText(address)) {
+            andCriterias.add(Criteria.where("address").regex(address.trim(), "i"));
+        }
+
+        if (StringUtils.hasText(phone)) {
+            andCriterias.add(Criteria.where("phone").regex(phone.trim(), "i"));
+        }
+
+        if (StringUtils.hasText(email)) {
+            andCriterias.add(Criteria.where("email").regex(email.trim(), "i"));
+        }
+
+        if (StringUtils.hasText(role)) {
+            andCriterias.add(Criteria.where("role").regex("^" + role.trim() + "$", "i"));
+        }
+
+        String normalizedPermission = normalizeApprovePermissionFilter(approvePermission);
+        if (StringUtils.hasText(normalizedPermission)) {
+            if (APPROVE_NONE.equals(normalizedPermission)) {
+                andCriterias.add(new Criteria().orOperator(
+                        Criteria.where("approvePermission").is(APPROVE_NONE),
+                        Criteria.where("approvePermission").exists(false),
+                        Criteria.where("approvePermission").is(null),
+                        Criteria.where("approvePermission").is("")
+                ));
+            } else {
+                andCriterias.add(Criteria.where("approvePermission").is(normalizedPermission));
+            }
+        }
+
+        if (!andCriterias.isEmpty()) {
+            query.addCriteria(new Criteria().andOperator(andCriterias.toArray(new Criteria[0])));
+        }
+
+        long total = mongoTemplate.count(query, User.class);
+        List<User> users = mongoTemplate.find(query.with(pageable), User.class);
+
+        List<UserDTO> content = users.stream()
+                .map(this::toUserDTO)
+                .collect(Collectors.toList());
+
+        return new PageImpl<>(content, pageable, total);
+    }
+
+    private UserDTO toUserDTO(User user) {
+        UserDTO dto = new UserDTO();
+        dto.setId(user.getId());
+        dto.setUsername(user.getUsername());
+        dto.setEmail(user.getEmail());
+        dto.setAddress(user.getAddress());
+        dto.setPhone(user.getPhone());
+        dto.setRole(user.getRole());
+        dto.setProfileImageUrl(user.getProfileImageUrl());
+        dto.setCreatedAt(user.getCreatedAt());
+        dto.setEnabled(user.isEnabled());
+        dto.setDepartmentId(user.getDepartmentId());
+        dto.setApprovePermission(normalizeApprovePermission(user.getApprovePermission()));
+        dto.setCanApproveNotice(canApproveNotice(user));
+        dto.setCanApproveDocument(canApproveDocument(user));
+        return dto;
+    }
+
+    private String normalizeApprovePermission(String value) {
+        if (!StringUtils.hasText(value)) {
+            return APPROVE_NONE;
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if (APPROVE_NOTICE.equals(permission)
+                || APPROVE_DOCUMENT.equals(permission)
+                || APPROVE_BOTH.equals(permission)
+                || APPROVE_NONE.equals(permission)) {
+            return permission;
+        }
+
+        return APPROVE_NONE;
+    }
+
+    private String normalizeApprovePermissionFilter(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if (APPROVE_NOTICE.equals(permission)
+                || APPROVE_DOCUMENT.equals(permission)
+                || APPROVE_BOTH.equals(permission)
+                || APPROVE_NONE.equals(permission)) {
+            return permission;
+        }
+
+        return "";
+    }
+
+    private boolean isAdmin(User user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
+
+        String role = user.getRole().trim();
+
+        return "Admin".equalsIgnoreCase(role)
+                || "ADMIN".equalsIgnoreCase(role)
+                || "ROLE_ADMIN".equalsIgnoreCase(role);
+    }
+
+    private boolean canApproveNotice(User user) {
+        if (isAdmin(user)) {
+            return true;
+        }
+
+        String permission = normalizeApprovePermission(user != null ? user.getApprovePermission() : null);
+        return APPROVE_NOTICE.equals(permission) || APPROVE_BOTH.equals(permission);
+    }
+
+    private boolean canApproveDocument(User user) {
+        if (isAdmin(user)) {
+            return true;
+        }
+
+        String permission = normalizeApprovePermission(user != null ? user.getApprovePermission() : null);
+        return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
+    }
 }

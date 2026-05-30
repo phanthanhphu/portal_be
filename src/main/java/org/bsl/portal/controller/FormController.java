@@ -15,15 +15,18 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -58,8 +61,21 @@ class FormController {
     @Autowired
     private AppSocketPublisher appSocketPublisher;
 
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
     private static final int MAX_FILES = 5;
     private final String FILE_DIR = "files/";
+
+    private static final String STATUS_PENDING = "PENDING";
+    private static final String STATUS_APPROVED = "APPROVED";
+    private static final String STATUS_REJECTED = "REJECTED";
+    private static final String STATUS_ALL = "ALL";
+
+    private static final String APPROVE_NONE = "NONE";
+    private static final String APPROVE_NOTICE = "NOTICE";
+    private static final String APPROVE_DOCUMENT = "DOCUMENT";
+    private static final String APPROVE_BOTH = "BOTH";
 
     // ==================== CREATE FORM ====================
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -142,6 +158,7 @@ class FormController {
             LocalDateTime now = LocalDateTime.now();
             item.setCreatedAt(now);
             item.setUpdatedAt(now);
+            item.setStatus(STATUS_PENDING);
 
             FormItem created = service.create(item);
 
@@ -406,6 +423,7 @@ class FormController {
             @RequestParam(required = false) String title,
             @RequestParam(required = false) String description,
             @RequestParam(required = false) String typeId,
+            @RequestParam(defaultValue = "APPROVED") String status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
@@ -414,6 +432,11 @@ class FormController {
             boolean admin = false;
             String currentDepartmentId = null;
             String filterDepartmentId = null;
+            String statusFilter = normalizeApprovalStatusFilter(status);
+            boolean canApproveDocument = false;
+
+            int safePage = Math.max(page, 0);
+            int safeSize = Math.max(size, 1);
 
             if (userId != null && !userId.trim().isEmpty()) {
                 Optional<User> userOpt = userService.findById(userId.trim());
@@ -426,6 +449,7 @@ class FormController {
                 currentUser = userOpt.get();
                 admin = isAdmin(currentUser);
                 currentDepartmentId = currentUser.getDepartmentId();
+                canApproveDocument = canApproveDocument(currentUser);
 
                 if (!admin && !skipDepartmentFilter) {
                     if (currentDepartmentId == null || currentDepartmentId.trim().isEmpty()) {
@@ -437,39 +461,69 @@ class FormController {
                 }
             }
 
-            Pageable pageable = PageRequest.of(
-                    page,
-                    size,
-                    Sort.by(Sort.Direction.DESC, "updatedAt")
-                            .and(Sort.by(Sort.Direction.DESC, "createdAt"))
-            );
+            Sort sort = Sort.by(Sort.Direction.DESC, "updatedAt")
+                    .and(Sort.by(Sort.Direction.DESC, "createdAt"));
 
-            Page<FormResponse> result = service.search(
-                    filterDepartmentId,
-                    division,
-                    departmentName,
-                    title,
-                    description,
-                    typeId,
-                    pageable
-            );
+            /*
+             * IMPORTANT FIX:
+             * Status is stored on FormItem, but service.search(...) returns FormResponse and
+             * does not filter status in DB. The old code filtered only the current page after
+             * pagination, so totalElements/counts were wrong.
+             *
+             * This code loads all pages that match normal filters first, applies the status
+             * filter, then paginates manually. That makes Pending/Approved/Rejected counts and
+             * tabs consistent with the UI.
+             */
+            final int lookupSize = 500;
+            int lookupPage = 0;
+            int lookupTotalPages = 1;
+            List<Map<String, Object>> filteredContent = new ArrayList<>();
 
-            List<Map<String, Object>> content = new ArrayList<>();
+            do {
+                Pageable lookupPageable = PageRequest.of(lookupPage, lookupSize, sort);
 
-            for (FormResponse form : result.getContent()) {
-                content.add(toFormResponseMap(form, admin, currentDepartmentId));
-            }
+                Page<FormResponse> lookupResult = service.search(
+                        filterDepartmentId,
+                        division,
+                        departmentName,
+                        title,
+                        description,
+                        typeId,
+                        lookupPageable
+                );
+
+                lookupTotalPages = Math.max(lookupResult.getTotalPages(), 1);
+
+                for (FormResponse form : lookupResult.getContent()) {
+                    Map<String, Object> formMap = toFormResponseMap(form, admin, currentDepartmentId);
+
+                    if (matchesApprovalStatus(formMap, statusFilter)) {
+                        filteredContent.add(formMap);
+                    }
+                }
+
+                lookupPage++;
+            } while (lookupPage < lookupTotalPages);
+
+            int totalElements = filteredContent.size();
+            int fromIndex = Math.min(safePage * safeSize, totalElements);
+            int toIndex = Math.min(fromIndex + safeSize, totalElements);
+            List<Map<String, Object>> pageContent = new ArrayList<>(filteredContent.subList(fromIndex, toIndex));
+            int totalPages = totalElements == 0 ? 0 : (int) Math.ceil((double) totalElements / safeSize);
 
             Map<String, Object> response = new HashMap<>();
-            response.put("content", content);
+            response.put("content", pageContent);
             response.put("isAdmin", admin);
             response.put("currentDepartmentId", currentDepartmentId);
             response.put("skipDepartmentFilter", skipDepartmentFilter);
             response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
-            response.put("totalElements", result.getTotalElements());
-            response.put("totalPages", result.getTotalPages());
-            response.put("number", result.getNumber());
-            response.put("size", result.getSize());
+            response.put("status", statusFilter);
+            response.put("canApproveDocument", canApproveDocument);
+            response.put("approvePermission", currentUser != null ? normalizeApprovePermission(currentUser.getApprovePermission()) : APPROVE_NONE);
+            response.put("totalElements", totalElements);
+            response.put("totalPages", totalPages);
+            response.put("number", safePage);
+            response.put("size", safeSize);
 
             return ResponseEntity.ok(response);
 
@@ -541,6 +595,22 @@ class FormController {
         String firstFileUrl = fileUrls.isEmpty() ? null : fileUrls.get(0);
         String firstPreviewUrl = previewUrls.isEmpty() ? firstFileUrl : previewUrls.get(0);
 
+        if (fullItem != null) {
+            map.put("status", normalizeApprovalStatus(fullItem.getStatus()));
+            map.put("approvedBy", fullItem.getApprovedBy());
+            map.put("approvedAt", fullItem.getApprovedAt());
+            map.put("rejectedBy", fullItem.getRejectedBy());
+            map.put("rejectedAt", fullItem.getRejectedAt());
+            map.put("rejectReason", fullItem.getRejectReason());
+        } else {
+            map.put("status", STATUS_APPROVED);
+            map.put("approvedBy", null);
+            map.put("approvedAt", null);
+            map.put("rejectedBy", null);
+            map.put("rejectedAt", null);
+            map.put("rejectReason", null);
+        }
+
         map.put("id", form.getId());
         map.put("departmentId", formDepartmentId);
         map.put("typeId", form.getTypeId());
@@ -562,8 +632,8 @@ class FormController {
         map.put("fileUrls", fileUrls);
         map.put("previewUrls", previewUrls);
 
-        map.put("createdAt", form.getCreatedAt());
-        map.put("updatedAt", form.getUpdatedAt());
+        map.put("createdAt", fullItem != null ? fullItem.getCreatedAt() : form.getCreatedAt());
+        map.put("updatedAt", fullItem != null ? fullItem.getUpdatedAt() : form.getUpdatedAt());
 
         map.put("canEdit", canModify);
         map.put("canDelete", canModify);
@@ -709,6 +779,265 @@ class FormController {
             item.setFileUrl(null);
             item.setPreviewUrl(null);
         }
+    }
+
+    private FormItem saveApprovalDirectly(FormItem item) {
+        if (item == null) {
+            return null;
+        }
+
+        if (item.getCreatedAt() == null) {
+            item.setCreatedAt(LocalDateTime.now());
+        }
+
+        if (item.getStatus() == null || item.getStatus().trim().isEmpty()) {
+            item.setStatus(STATUS_APPROVED);
+        } else {
+            item.setStatus(normalizeApprovalStatus(item.getStatus()));
+        }
+
+        return mongoTemplate.save(item);
+    }
+
+    // ==================== APPROVE FORM/DOCUMENT ====================
+    @PatchMapping("/{id}/approve")
+    public ResponseEntity<?> approve(
+            @PathVariable String id,
+            @RequestParam String userId) {
+
+        try {
+            Optional<User> userOpt = userService.findById(userId.trim());
+
+            if (userOpt.isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+            }
+
+            User user = userOpt.get();
+
+            if (!canApproveDocument(user)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "You do not have Document approval permission"));
+            }
+
+            FormItem existing = service.getById(id);
+
+            if (existing == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Form not found"));
+            }
+
+            LocalDateTime now = LocalDateTime.now();
+
+            existing.setStatus(STATUS_APPROVED);
+            existing.setApprovedBy(userId.trim());
+            existing.setApprovedAt(now);
+            existing.setRejectedBy(null);
+            existing.setRejectedAt(null);
+            existing.setRejectReason(null);
+            existing.setUpdatedAt(now);
+
+            FormItem updated = saveApprovalDirectly(existing);
+
+            appSocketPublisher.formChanged("APPROVED", updated.getId());
+
+            return ResponseEntity.ok(updated);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Approve failed: " + e.getMessage()));
+        }
+    }
+
+    // ==================== REJECT FORM/DOCUMENT ====================
+    @PatchMapping("/{id}/reject")
+    public ResponseEntity<?> reject(
+            @PathVariable String id,
+            @RequestParam String userId,
+            @RequestBody(required = false) Map<String, String> body) {
+
+        try {
+            Optional<User> userOpt = userService.findById(userId.trim());
+
+            if (userOpt.isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+            }
+
+            User user = userOpt.get();
+
+            if (!canApproveDocument(user)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "You do not have Document approval permission"));
+            }
+
+            FormItem existing = service.getById(id);
+
+            if (existing == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Form not found"));
+            }
+
+            String reason = body != null ? body.getOrDefault("reason", "") : "";
+            LocalDateTime now = LocalDateTime.now();
+
+            existing.setStatus(STATUS_REJECTED);
+            existing.setRejectedBy(userId.trim());
+            existing.setRejectedAt(now);
+            existing.setRejectReason(reason != null ? reason.trim() : "");
+            existing.setApprovedBy(null);
+            existing.setApprovedAt(null);
+            existing.setUpdatedAt(now);
+
+            FormItem updated = saveApprovalDirectly(existing);
+
+            appSocketPublisher.formChanged("REJECTED", updated.getId());
+
+            return ResponseEntity.ok(updated);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Reject failed: " + e.getMessage()));
+        }
+    }
+
+    // ==================== CHANGE FORM/DOCUMENT STATUS ====================
+    @PatchMapping("/{id}/status")
+    public ResponseEntity<?> changeStatus(
+            @PathVariable String id,
+            @RequestParam String userId,
+            @RequestBody Map<String, String> body) {
+
+        try {
+            Optional<User> userOpt = userService.findById(userId.trim());
+
+            if (userOpt.isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+            }
+
+            User user = userOpt.get();
+
+            if (!canApproveDocument(user)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "You do not have Document approval permission"));
+            }
+
+            FormItem existing = service.getById(id);
+
+            if (existing == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Form not found"));
+            }
+
+            String nextStatus = normalizeApprovalStatus(body != null ? body.get("status") : null);
+            String reason = body != null ? body.getOrDefault("reason", "") : "";
+            LocalDateTime now = LocalDateTime.now();
+
+            existing.setStatus(nextStatus);
+            existing.setUpdatedAt(now);
+
+            if (STATUS_APPROVED.equals(nextStatus)) {
+                existing.setApprovedBy(userId.trim());
+                existing.setApprovedAt(now);
+                existing.setRejectedBy(null);
+                existing.setRejectedAt(null);
+                existing.setRejectReason(null);
+            } else if (STATUS_REJECTED.equals(nextStatus)) {
+                if (reason == null || reason.trim().isEmpty()) {
+                    return ResponseEntity.badRequest()
+                            .body(Map.of("message", "Reject reason is required"));
+                }
+
+                existing.setRejectedBy(userId.trim());
+                existing.setRejectedAt(now);
+                existing.setRejectReason(reason.trim());
+                existing.setApprovedBy(null);
+                existing.setApprovedAt(null);
+            } else {
+                existing.setApprovedBy(null);
+                existing.setApprovedAt(null);
+                existing.setRejectedBy(null);
+                existing.setRejectedAt(null);
+                existing.setRejectReason(null);
+            }
+
+            FormItem updated = saveApprovalDirectly(existing);
+
+            appSocketPublisher.formChanged("STATUS_CHANGED", updated.getId());
+
+            return ResponseEntity.ok(updated);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Change status failed: " + e.getMessage()));
+        }
+    }
+
+    private String normalizeApprovalStatus(Object value) {
+        if (value == null) {
+            return STATUS_APPROVED;
+        }
+
+        String status = String.valueOf(value).trim().toUpperCase();
+
+        if (STATUS_PENDING.equals(status)
+                || STATUS_APPROVED.equals(status)
+                || STATUS_REJECTED.equals(status)) {
+            return status;
+        }
+
+        return STATUS_APPROVED;
+    }
+
+    private String normalizeApprovalStatusFilter(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return STATUS_APPROVED;
+        }
+
+        String status = value.trim().toUpperCase();
+
+        if (STATUS_ALL.equals(status)
+                || STATUS_PENDING.equals(status)
+                || STATUS_APPROVED.equals(status)
+                || STATUS_REJECTED.equals(status)) {
+            return status;
+        }
+
+        return STATUS_APPROVED;
+    }
+
+    private boolean matchesApprovalStatus(Map<String, Object> map, String statusFilter) {
+        if (STATUS_ALL.equals(statusFilter)) {
+            return true;
+        }
+
+        String itemStatus = normalizeApprovalStatus(map.get("status"));
+
+        return statusFilter.equals(itemStatus);
+    }
+
+    private String normalizeApprovePermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return APPROVE_NONE;
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if (APPROVE_NOTICE.equals(permission)
+                || APPROVE_DOCUMENT.equals(permission)
+                || APPROVE_BOTH.equals(permission)
+                || APPROVE_NONE.equals(permission)) {
+            return permission;
+        }
+
+        return APPROVE_NONE;
+    }
+
+    private boolean canApproveDocument(User user) {
+        String permission = normalizeApprovePermission(user != null ? user.getApprovePermission() : null);
+
+        return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
     }
 
     private boolean sameDepartment(String currentDepartmentId, String itemDepartmentId) {

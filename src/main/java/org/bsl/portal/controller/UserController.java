@@ -75,6 +75,11 @@ public class UserController {
     private static final String UPLOAD_DIR = "uploads/users/";
     private static final long MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
+    public static final String APPROVE_NONE = "NONE";
+    public static final String APPROVE_NOTICE = "NOTICE";
+    public static final String APPROVE_DOCUMENT = "DOCUMENT";
+    public static final String APPROVE_BOTH = "BOTH";
+
     // Set để lưu các token đã bị blacklist (để invalidate token khi logout)
     private final Set<String> blacklistedTokens = new HashSet<>();
 
@@ -130,6 +135,7 @@ public class UserController {
             user.setRole(request.getRole());
             user.setTokenVersion(1L);
             user.setDepartmentId(request.getDepartmentId());
+            user.setApprovePermission(normalizeApprovePermission(request.getApprovePermission()));
 
             Boolean isEnabled = request.getIsEnabled();
             user.setEnabled(isEnabled != null ? isEnabled : true);
@@ -219,11 +225,20 @@ public class UserController {
             @RequestParam(required = false, defaultValue = "") String address,
             @RequestParam(required = false, defaultValue = "") String phone,
             @RequestParam(required = false, defaultValue = "") String email,
-            @RequestParam(required = false, defaultValue = "") String role
+            @RequestParam(required = false, defaultValue = "") String role,
+            @RequestParam(required = false, defaultValue = "") String approvePermission
     ) {
         try {
             Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Order.desc("createdAt")));
-            Page<UserDTO> userDTOPage = userService.filterUsers(username, address, phone, email, role, pageable);
+            Page<UserDTO> userDTOPage = userService.filterUsers(
+                    username,
+                    address,
+                    phone,
+                    email,
+                    role,
+                    normalizeApprovePermissionFilter(approvePermission),
+                    pageable
+            );
 
             Map<String, Object> response = new HashMap<>();
             response.put("message", "Users retrieved successfully");
@@ -294,10 +309,10 @@ public class UserController {
             }
 
             // Nếu muốn bật lại check password thì mở đoạn dưới:
-             if (!passwordEncoder.matches(loginRequest.getPassword(), user.getPassword())) {
-                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                         .body(Map.of("message", "Invalid password"));
-             }
+            if (!passwordEncoder.matches(loginRequest.getPassword(), user.getPassword())) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("message", "Invalid password"));
+            }
 
             long tokenVersion = user.getTokenVersion();
             String token = jwtUtil.generateToken(user.getEmail(), user.getRole(), tokenVersion);
@@ -434,6 +449,11 @@ public class UserController {
             user.setCreatedAt(existingUser.getCreatedAt());
             user.setTokenVersion(existingUser.getTokenVersion());
             user.setDepartmentId(request.getDepartmentId());
+            user.setApprovePermission(
+                    request.getApprovePermission() != null
+                            ? normalizeApprovePermission(request.getApprovePermission())
+                            : normalizeApprovePermission(existingUser.getApprovePermission())
+            );
 
             Boolean isEnabled = request.getIsEnabled();
             user.setEnabled(isEnabled != null ? isEnabled : existingUser.isEnabled());
@@ -737,6 +757,76 @@ public class UserController {
         }
     }
 
+    private String normalizeApprovePermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return APPROVE_NONE;
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if (APPROVE_NOTICE.equals(permission)
+                || APPROVE_DOCUMENT.equals(permission)
+                || APPROVE_BOTH.equals(permission)
+                || APPROVE_NONE.equals(permission)) {
+            return permission;
+        }
+
+        return APPROVE_NONE;
+    }
+
+    private String normalizeApprovePermissionFilter(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "";
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if ("ALL".equals(permission)) {
+            return "";
+        }
+
+        if (APPROVE_NOTICE.equals(permission)
+                || APPROVE_DOCUMENT.equals(permission)
+                || APPROVE_BOTH.equals(permission)
+                || APPROVE_NONE.equals(permission)) {
+            return permission;
+        }
+
+        return "";
+    }
+
+    private boolean isAdmin(User user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
+
+        String role = user.getRole().trim();
+
+        return "Admin".equalsIgnoreCase(role)
+                || "ADMIN".equalsIgnoreCase(role)
+                || "ROLE_ADMIN".equalsIgnoreCase(role);
+    }
+
+    private boolean canApproveNotice(User user) {
+        if (isAdmin(user)) {
+            return true;
+        }
+
+        String permission = normalizeApprovePermission(user != null ? user.getApprovePermission() : null);
+
+        return APPROVE_NOTICE.equals(permission) || APPROVE_BOTH.equals(permission);
+    }
+
+    private boolean canApproveDocument(User user) {
+        if (isAdmin(user)) {
+            return true;
+        }
+
+        String permission = normalizeApprovePermission(user != null ? user.getApprovePermission() : null);
+
+        return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
+    }
+
     private Map<String, Object> buildUserResponse(User user) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("id", user.getId());
@@ -745,13 +835,19 @@ public class UserController {
         data.put("address", user.getAddress());
         data.put("phone", user.getPhone());
         data.put("role", user.getRole());
+        data.put("approvePermission", normalizeApprovePermission(user.getApprovePermission()));
+        data.put("canApproveNotice", canApproveNotice(user));
+        data.put("canApproveDocument", canApproveDocument(user));
         data.put("profileImageUrl", user.getProfileImageUrl());
         data.put("createdAt", user.getCreatedAt());
         data.put("enabled", user.isEnabled());
+        data.put("isEnabled", user.isEnabled());
+        data.put("departmentId", user.getDepartmentId());
 
         if (user.getDepartmentId() != null) {
             Map<String, Object> departmentMap = new LinkedHashMap<>();
             departmentMap.put("id", user.getDepartmentId());
+            data.put("department", departmentMap);
         } else {
             data.put("department", null);
         }

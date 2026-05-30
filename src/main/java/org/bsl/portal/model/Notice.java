@@ -11,6 +11,10 @@ import java.util.List;
 @Document(collection = "notices")
 public class Notice {
 
+    public static final String STATUS_PENDING = "PENDING";
+    public static final String STATUS_APPROVED = "APPROVED";
+    public static final String STATUS_REJECTED = "REJECTED";
+
     @Id
     private String id;
 
@@ -43,6 +47,28 @@ public class Notice {
     @Indexed
     private String departmentId;
 
+    // trạng thái duyệt bài: PENDING, APPROVED, REJECTED
+    // Mặc định APPROVED để dữ liệu cũ chưa có status vẫn hiển thị bình thường.
+    @Indexed
+    private String status = STATUS_APPROVED;
+
+    // admin duyệt bài
+    private String approvedBy;
+
+    // thời gian duyệt bài
+    @Indexed
+    private LocalDateTime approvedAt;
+
+    // admin từ chối bài
+    private String rejectedBy;
+
+    // thời gian từ chối bài
+    @Indexed
+    private LocalDateTime rejectedAt;
+
+    // lý do từ chối bài
+    private String rejectReason;
+
     // ngày tạo
     @Indexed
     private LocalDateTime createdAt;
@@ -56,6 +82,7 @@ public class Notice {
         this.createdAt = now;
         this.updatedAt = now;
         this.pinned = false;
+        this.status = STATUS_APPROVED;
     }
 
     // Constructor cũ: giữ lại để không làm lỗi code đang gọi hiện tại
@@ -67,6 +94,7 @@ public class Notice {
         this.pinned = pinned;
         this.userId = userId;
         this.departmentId = departmentId;
+        this.status = STATUS_APPROVED;
 
         if (fileUrl != null && !fileUrl.trim().isEmpty()) {
             this.fileUrls.add(fileUrl.trim());
@@ -97,6 +125,7 @@ public class Notice {
         this.pinned = pinned;
         this.userId = userId;
         this.departmentId = departmentId;
+        this.status = STATUS_APPROVED;
 
         if (!this.fileUrls.isEmpty()) {
             this.fileUrl = this.fileUrls.get(0);
@@ -137,6 +166,22 @@ public class Notice {
         }
 
         return result;
+    }
+
+    private String normalizeStatus(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return STATUS_APPROVED;
+        }
+
+        String cleanStatus = value.trim().toUpperCase();
+
+        if (STATUS_PENDING.equals(cleanStatus)
+                || STATUS_APPROVED.equals(cleanStatus)
+                || STATUS_REJECTED.equals(cleanStatus)) {
+            return cleanStatus;
+        }
+
+        return STATUS_APPROVED;
     }
 
     private void syncSingleFileFromList() {
@@ -282,6 +327,55 @@ public class Notice {
 
     public void setDepartmentId(String departmentId) {
         this.departmentId = departmentId;
+    }
+
+    public String getStatus() {
+        this.status = normalizeStatus(this.status);
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = normalizeStatus(status);
+    }
+
+    public String getApprovedBy() {
+        return approvedBy;
+    }
+
+    public void setApprovedBy(String approvedBy) {
+        this.approvedBy = approvedBy;
+    }
+
+    public LocalDateTime getApprovedAt() {
+        return approvedAt;
+    }
+
+    public void setApprovedAt(LocalDateTime approvedAt) {
+        this.approvedAt = approvedAt;
+    }
+
+    public String getRejectedBy() {
+        return rejectedBy;
+    }
+
+    public void setRejectedBy(String rejectedBy) {
+        this.rejectedBy = rejectedBy;
+    }
+
+    public LocalDateTime getRejectedAt() {
+        return rejectedAt;
+    }
+
+    public void setRejectedAt(LocalDateTime rejectedAt) {
+        this.rejectedAt = rejectedAt;
+    }
+
+    public String getRejectReason() {
+        return rejectReason;
+    }
+
+    public void setRejectReason(String rejectReason) {
+        this.rejectReason = rejectReason;
     }
 
     public LocalDateTime getCreatedAt() {
