@@ -533,6 +533,44 @@ class FormController {
         }
     }
 
+
+    private String getDocumentTypeDisplayName(String typeId) {
+        if (typeId == null || typeId.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            DocumentType type = documentTypeService.getById(typeId.trim());
+
+            if (type == null) {
+                return null;
+            }
+
+            String[] getterNames = {
+                    "getName",
+                    "getTypeName",
+                    "getDocumentTypeName",
+                    "getTitle"
+            };
+
+            for (String getterName : getterNames) {
+                try {
+                    Object value = type.getClass().getMethod(getterName).invoke(type);
+
+                    if (value != null && !String.valueOf(value).trim().isEmpty()) {
+                        return String.valueOf(value).trim();
+                    }
+                } catch (NoSuchMethodException ignored) {
+                    // Try the next common getter name.
+                }
+            }
+        } catch (Exception ignored) {
+            // Keep API stable: if type lookup fails, FE can still receive typeId.
+        }
+
+        return null;
+    }
+
     private Map<String, Object> toFormResponseMap(
             FormResponse form,
             boolean admin,
@@ -541,6 +579,8 @@ class FormController {
         Map<String, Object> map = new HashMap<>();
 
         String formDepartmentId = form.getDepartmentId();
+        String formTypeId = form.getTypeId();
+        String formTypeName = getDocumentTypeDisplayName(formTypeId);
         boolean canModify = admin || sameDepartment(currentDepartmentId, formDepartmentId);
 
         /*
@@ -613,7 +653,9 @@ class FormController {
 
         map.put("id", form.getId());
         map.put("departmentId", formDepartmentId);
-        map.put("typeId", form.getTypeId());
+        map.put("typeId", formTypeId);
+        map.put("typeName", formTypeName != null ? formTypeName : formTypeId);
+        map.put("documentTypeName", formTypeName != null ? formTypeName : formTypeId);
         map.put("departmentName", form.getDepartmentName());
         map.put("division", form.getDivision());
         map.put("title", form.getTitle());

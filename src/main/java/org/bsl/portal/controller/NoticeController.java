@@ -666,6 +666,7 @@ public class NoticeController {
         try {
             boolean admin = false;
             String currentDepartmentId = null;
+            String currentUserName = null;
             String filterDepartmentId = null;
             String normalizedStatusFilter = normalizeApprovalStatusFilter(status);
 
@@ -680,6 +681,7 @@ public class NoticeController {
                 User user = userOpt.get();
                 admin = isAdmin(user);
                 currentDepartmentId = user.getDepartmentId();
+                currentUserName = getUserDisplayName(user);
 
                 if (!admin && !skipDepartmentFilter) {
                     filterDepartmentId = currentDepartmentId;
@@ -818,6 +820,8 @@ public class NoticeController {
             response.put("content", responseContent);
             response.put("isAdmin", admin);
             response.put("currentDepartmentId", currentDepartmentId);
+            response.put("currentUserName", currentUserName);
+            response.put("requestUserName", currentUserName);
             response.put("skipDepartmentFilter", skipDepartmentFilter);
             response.put("includeFeaturedPinned", includeFeaturedPinned);
             response.put("status", normalizedStatusFilter);
@@ -873,6 +877,15 @@ public class NoticeController {
         } else {
             map.put("status", normalizeApprovalStatus(map.get("status")));
         }
+
+        String creatorUserId = fullNotice != null
+                ? getStringValue(fullNotice.getUserId())
+                : getStringValue(map.get("userId"));
+        String creatorUserName = getUserDisplayNameById(creatorUserId);
+
+        map.put("createdByUserId", creatorUserId);
+        map.put("createdByName", creatorUserName != null ? creatorUserName : creatorUserId);
+        map.put("userName", creatorUserName != null ? creatorUserName : creatorUserId);
 
         List<String> fileUrls = new ArrayList<>();
 
@@ -1104,6 +1117,88 @@ public class NoticeController {
         Optional<User> userOpt = userService.findById(userId.trim());
 
         return userOpt.orElse(null);
+    }
+
+    private String getUserDisplayNameById(String userId) {
+        if (userId == null || userId.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            Optional<User> userOpt = userService.findById(userId.trim());
+
+            if (userOpt.isEmpty()) {
+                return userId.trim();
+            }
+
+            String displayName = getUserDisplayName(userOpt.get());
+
+            return displayName != null ? displayName : userId.trim();
+        } catch (Exception e) {
+            return userId.trim();
+        }
+    }
+
+    private String getUserDisplayName(User user) {
+        if (user == null) {
+            return null;
+        }
+
+        String firstName = getUserStringProperty(user, "firstName");
+        String lastName = getUserStringProperty(user, "lastName");
+        String fullFromParts = String.join(" ",
+                firstName != null ? firstName : "",
+                lastName != null ? lastName : "").trim();
+
+        if (!fullFromParts.isEmpty()) {
+            return fullFromParts;
+        }
+
+        String[] preferredFields = {
+                "fullName",
+                "name",
+                "username",
+                "userName",
+                "displayName",
+                "email"
+        };
+
+        for (String field : preferredFields) {
+            String value = getUserStringProperty(user, field);
+
+            if (value != null) {
+                return value;
+            }
+        }
+
+        return getStringValue(getUserStringProperty(user, "id"));
+    }
+
+    private String getUserStringProperty(User user, String propertyName) {
+        try {
+            PropertyDescriptor[] descriptors = Introspector
+                    .getBeanInfo(user.getClass(), Object.class)
+                    .getPropertyDescriptors();
+
+            for (PropertyDescriptor descriptor : descriptors) {
+                if (!descriptor.getName().equalsIgnoreCase(propertyName)) {
+                    continue;
+                }
+
+                Method readMethod = descriptor.getReadMethod();
+
+                if (readMethod == null) {
+                    return null;
+                }
+
+                Object value = readMethod.invoke(user);
+
+                return getStringValue(value);
+            }
+        } catch (Exception ignored) {
+        }
+
+        return null;
     }
 
     private String resolveDepartmentIdForCreateOrUpdate(User user, boolean admin, String requestDepartmentId) {
