@@ -14,6 +14,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.*;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -59,7 +61,7 @@ public class NoticeController {
     public ResponseEntity<?> create(
             @RequestParam String title,
             @RequestParam String content,
-            @RequestParam String userId,
+            @RequestParam(required = false) String userId,
             @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) Boolean pinned,
             @RequestParam(value = "files", required = false) List<MultipartFile> files,
@@ -73,13 +75,13 @@ public class NoticeController {
                         .body(Map.of("message", "Title is required"));
             }
 
-            User user = getUserOrNull(userId);
+            User user = getAuthenticatedUserOrNull();
 
             if (user == null) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+                return unauthorizedNoticeRequest();
             }
 
+            userId = getAuthenticatedUserId(user);
             boolean admin = isAdmin(user);
 
             String effectiveDepartmentId = resolveDepartmentIdForCreateOrUpdate(user, admin, departmentId);
@@ -193,23 +195,18 @@ public class NoticeController {
                         .body(Map.of("message", "Title is required"));
             }
 
-            User user = null;
-            boolean admin = false;
+            User user = getAuthenticatedUserOrNull();
 
-            if (userId != null && !userId.trim().isEmpty()) {
-                user = getUserOrNull(userId.trim());
+            if (user == null) {
+                return unauthorizedNoticeRequest();
+            }
 
-                if (user == null) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("message", "User with ID " + userId + " does not exist"));
-                }
+            boolean admin = isAdmin(user);
+            userId = getAuthenticatedUserId(user);
 
-                admin = isAdmin(user);
-
-                if (!canModifyNotice(user, admin, existing)) {
-                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                            .body(Map.of("message", "You do not have permission to update this notice"));
-                }
+            if (!canModifyNotice(user, admin, existing)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "You do not have permission to update this notice"));
             }
 
             String effectiveDepartmentId;
@@ -373,20 +370,18 @@ public class NoticeController {
 
         try {
 
-            if (userId != null && !userId.trim().isEmpty()) {
-                User user = getUserOrNull(userId.trim());
+            User user = getAuthenticatedUserOrNull();
 
-                if (user == null) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("message", "User with ID " + userId + " does not exist"));
-                }
+            if (user == null) {
+                return unauthorizedNoticeRequest();
+            }
 
-                boolean admin = isAdmin(user);
+            boolean admin = isAdmin(user);
+            userId = getAuthenticatedUserId(user);
 
-                if (!canModifyNotice(user, admin, existing)) {
-                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                            .body(Map.of("message", "You do not have permission to delete this notice"));
-                }
+            if (!canModifyNotice(user, admin, existing)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "You do not have permission to delete this notice"));
             }
 
             List<String> fileUrls = getExistingFileUrls(existing);
@@ -446,6 +441,19 @@ public class NoticeController {
                     .body(Map.of("message", "Notice not found"));
         }
 
+        User user = getAuthenticatedUserOrNull();
+
+        if (user == null) {
+            return unauthorizedNoticeRequest();
+        }
+
+        boolean admin = isAdmin(user);
+
+        if (!canModifyNotice(user, admin, notice)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("message", "You do not have permission to pin this notice"));
+        }
+
         Notice updated = noticeService.pin(id, Boolean.TRUE.equals(pinned));
 
         appSocketPublisher.noticeChanged("UPDATED", updated.getId());
@@ -457,7 +465,7 @@ public class NoticeController {
     @PatchMapping("/{id}/approve")
     public ResponseEntity<?> approve(
             @PathVariable String id,
-            @RequestParam String userId) {
+            @RequestParam(required = false) String userId) {
 
         try {
             Notice existing = noticeService.getById(id);
@@ -467,17 +475,18 @@ public class NoticeController {
                         .body(Map.of("message", "Notice not found"));
             }
 
-            User adminUser = getUserOrNull(userId);
+            User adminUser = getAuthenticatedUserOrNull();
 
             if (adminUser == null) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+                return unauthorizedNoticeRequest();
             }
 
-            if (!isAdmin(adminUser)) {
+            if (!canApproveNoticeByPermission(adminUser)) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("message", "Only admin can approve notice"));
+                        .body(Map.of("message", "You do not have Notice approval permission"));
             }
+
+            userId = getAuthenticatedUserId(adminUser);
 
             LocalDateTime now = LocalDateTime.now();
 
@@ -507,7 +516,7 @@ public class NoticeController {
     @PatchMapping("/{id}/reject")
     public ResponseEntity<?> reject(
             @PathVariable String id,
-            @RequestParam String userId,
+            @RequestParam(required = false) String userId,
             @RequestBody(required = false) Map<String, String> body) {
 
         try {
@@ -518,17 +527,18 @@ public class NoticeController {
                         .body(Map.of("message", "Notice not found"));
             }
 
-            User adminUser = getUserOrNull(userId);
+            User adminUser = getAuthenticatedUserOrNull();
 
             if (adminUser == null) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+                return unauthorizedNoticeRequest();
             }
 
-            if (!isAdmin(adminUser)) {
+            if (!canApproveNoticeByPermission(adminUser)) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("message", "Only admin can reject notice"));
+                        .body(Map.of("message", "You do not have Notice approval permission"));
             }
+
+            userId = getAuthenticatedUserId(adminUser);
 
             String reason = body != null ? body.getOrDefault("reason", "") : "";
             LocalDateTime now = LocalDateTime.now();
@@ -560,7 +570,7 @@ public class NoticeController {
     @PatchMapping("/{id}/status")
     public ResponseEntity<?> changeStatus(
             @PathVariable String id,
-            @RequestParam String userId,
+            @RequestParam(required = false) String userId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String reason,
             @RequestBody(required = false) Map<String, String> body) {
@@ -573,17 +583,18 @@ public class NoticeController {
                         .body(Map.of("message", "Notice not found"));
             }
 
-            User adminUser = getUserOrNull(userId);
+            User adminUser = getAuthenticatedUserOrNull();
 
             if (adminUser == null) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
+                return unauthorizedNoticeRequest();
             }
 
-            if (!isAdmin(adminUser)) {
+            if (!canApproveNoticeByPermission(adminUser)) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("message", "Only admin can change notice status"));
+                        .body(Map.of("message", "You do not have Notice approval permission"));
             }
+
+            userId = getAuthenticatedUserId(adminUser);
 
             String requestedStatus = status;
             String rejectReason = reason;
@@ -665,23 +676,30 @@ public class NoticeController {
 
         try {
             boolean admin = false;
+            boolean canApproveNotice = false;
             String currentDepartmentId = null;
             String currentUserName = null;
             String filterDepartmentId = null;
             String normalizedStatusFilter = normalizeApprovalStatusFilter(status);
 
-            if (userId != null && !userId.trim().isEmpty()) {
-                Optional<User> userOpt = userService.findById(userId.trim());
+            User user = getAuthenticatedUserOrNull();
 
-                if (userOpt.isEmpty()) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("message", "User with ID " + userId + " does not exist"));
-                }
+            // Public search is allowed only for approved notices.
+            if (user == null && !STATUS_APPROVED.equals(normalizedStatusFilter)) {
+                normalizedStatusFilter = STATUS_APPROVED;
+            }
 
-                User user = userOpt.get();
+            if (user != null) {
+                userId = getAuthenticatedUserId(user);
                 admin = isAdmin(user);
+                canApproveNotice = canApproveNoticeByPermission(user);
                 currentDepartmentId = user.getDepartmentId();
                 currentUserName = getUserDisplayName(user);
+
+                if (!STATUS_APPROVED.equals(normalizedStatusFilter) && !canApproveNotice) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(Map.of("message", "You do not have permission to view non-approved notices"));
+                }
 
                 if (!admin && !skipDepartmentFilter) {
                     filterDepartmentId = currentDepartmentId;
@@ -825,6 +843,8 @@ public class NoticeController {
             response.put("skipDepartmentFilter", skipDepartmentFilter);
             response.put("includeFeaturedPinned", includeFeaturedPinned);
             response.put("status", normalizedStatusFilter);
+            response.put("approvePermission", user != null ? normalizeApprovePermission(user.getApprovePermission()) : "NONE");
+            response.put("canApproveNotice", canApproveNotice);
             response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
             response.put("totalElements", totalElements);
             response.put("totalPages", totalPages);
@@ -1107,6 +1127,68 @@ public class NoticeController {
             notice.setFileUrl(null);
             notice.setPreviewUrl(null);
         }
+    }
+
+    private User getAuthenticatedUserOrNull() {
+        try {
+            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+            if (authentication == null || !authentication.isAuthenticated()) {
+                return null;
+            }
+
+            Object principal = authentication.getPrincipal();
+
+            if (principal == null) {
+                return null;
+            }
+
+            String email = String.valueOf(principal).trim();
+
+            if (email.isEmpty() || "anonymousUser".equalsIgnoreCase(email)) {
+                return null;
+            }
+
+            return userService.findByEmail(email).orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private ResponseEntity<?> unauthorizedNoticeRequest() {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("message", "Authentication is required. Please login again."));
+    }
+
+    private String getAuthenticatedUserId(User user) {
+        return user != null && user.getId() != null ? user.getId().trim() : "";
+    }
+
+    private String normalizeApprovePermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "NONE";
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if ("NOTICE".equals(permission)
+                || "DOCUMENT".equals(permission)
+                || "BOTH".equals(permission)
+                || "NONE".equals(permission)) {
+            return permission;
+        }
+
+        return "NONE";
+    }
+
+    private boolean canApproveNoticeByPermission(User user) {
+        if (user == null) {
+            return false;
+        }
+
+        String permission = normalizeApprovePermission(user.getApprovePermission());
+
+        return "NOTICE".equals(permission) || "BOTH".equals(permission);
     }
 
     private User getUserOrNull(String userId) {

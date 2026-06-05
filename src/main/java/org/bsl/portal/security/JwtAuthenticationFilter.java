@@ -1,6 +1,5 @@
 package org.bsl.portal.security;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -8,18 +7,15 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.List;
 
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -40,89 +36,71 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         logger.debug("JwtFilter processing → {} {}", method, path);
 
-        // Extract token từ header Authorization
         String authHeader = request.getHeader("Authorization");
-        String token = null;
 
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            token = authHeader.substring(7);
-            logger.debug("Bearer token found → length: {}", token.length());
-        }
+        if (StringUtils.hasText(authHeader) && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7).trim();
 
-        // Nếu có token → validate & set Authentication
-        if (token != null && !token.isBlank()) {
             try {
-                if (jwtUtil.validateToken(token)) {
+                if (StringUtils.hasText(token) && jwtUtil.validateToken(token)) {
                     String userEmail = jwtUtil.getEmailFromToken(token);
-                    logger.info("Valid token → User: {} | Path: {}", userEmail, path);
+                    String role = jwtUtil.getRoleFromToken(token);
 
-                    // Tạo Authentication (có thể mở rộng authorities sau)
+                    String authority = "ROLE_USER";
+
+                    if (StringUtils.hasText(role)) {
+                        String normalizedRole = role.trim().toUpperCase();
+                        authority = normalizedRole.startsWith("ROLE_")
+                                ? normalizedRole
+                                : "ROLE_" + normalizedRole;
+                    }
+
                     UsernamePasswordAuthenticationToken authToken =
-                            new UsernamePasswordAuthenticationToken(userEmail, null, Collections.emptyList());
+                            new UsernamePasswordAuthenticationToken(
+                                    userEmail,
+                                    null,
+                                    List.of(new SimpleGrantedAuthority(authority))
+                            );
 
                     SecurityContextHolder.getContext().setAuthentication(authToken);
+
+                    logger.debug("Valid token → User: {} | Role: {} | Path: {}", userEmail, authority, path);
                 } else {
                     logger.warn("Invalid token → Path: {}", path);
                 }
             } catch (Exception e) {
+                SecurityContextHolder.clearContext();
                 logger.error("Token validation error → Path: {} | Message: {}", path, e.getMessage());
             }
         }
 
-        // Luôn tiếp tục filter chain
-        // - Nếu public endpoint (permitAll) → request đi tiếp dù không có auth
-        // - Nếu protected → AuthorizationFilter sau sẽ kiểm tra và trả 401 nếu cần
         filterChain.doFilter(request, response);
     }
 
     private boolean isStaticResource(String path) {
-        // Giữ lại nếu bạn có static files cần bypass sớm (nhưng thường không cần vì permitAll đã xử lý)
-        return path.startsWith("/uploads/") ||
-                path.matches("/(assets|static|public|css|js|images)/.*") ||
-                path.matches(".*\\.(css|js|png|jpg|jpeg|gif|webp|ico|svg|woff2?|ttf|eot|pdf|zip|gz|json|xml|txt|html)$") ||
-                "/favicon.ico".equals(path) ||
-                "/".equals(path) ||
-                "/index.html".equals(path);
+        return path.startsWith("/files/")
+                || path.startsWith("/uploads/")
+                || path.matches("/(assets|static|public|css|js|images)/.*")
+                || path.matches(".*\\.(css|js|png|jpg|jpeg|gif|webp|ico|svg|woff2?|ttf|eot|pdf|zip|gz|json|xml|txt|html)$")
+                || "/favicon.ico".equals(path)
+                || "/".equals(path)
+                || "/index.html".equals(path);
     }
-
-//    @Override
-//    protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
-//        String path = request.getRequestURI();
-//        return path.matches("^/error.*|/actuator.*|/health$");
-//    }
 
     @Override
-    protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
+    protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
 
+        /*
+         * Không skip /api/notices hoặc /api/notices/search.
+         * Search có thể public trong SecurityConfig, nhưng nếu frontend gửi token
+         * thì filter vẫn cần chạy để set SecurityContext.
+         *
+         * Riêng /ws/** phải skip vì SockJS gọi /ws/info không gửi Bearer token.
+         */
         return path.matches("^/error.*|/actuator.*|/health$")
-                || path.equals("/api/app-links/search")
-                || path.equals("/api/departments")
-                || path.equals("/api/forms/search")
-                || path.equals("/api/notices/search")
-                || path.equals("/api/app-links")
-                || path.equals("/api/departments/search")
-                || path.equals("/api/notices")
-                || path.startsWith("/files/")
+                || path.equals("/ws")
+                || path.startsWith("/ws/")
                 || isStaticResource(path);
-    }
-
-    // Nếu bạn vẫn muốn trả JSON error đẹp khi 401 (tùy chọn)
-    private void sendErrorResponse(HttpServletResponse response, HttpStatus status, String message)
-            throws IOException {
-        response.setStatus(status.value());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.setCharacterEncoding("UTF-8");
-
-        Map<String, Object> error = new HashMap<>();
-        error.put("success", false);
-        error.put("message", message);
-        error.put("status", status.value());
-        error.put("timestamp", System.currentTimeMillis());
-
-        ObjectMapper mapper = new ObjectMapper();
-        String json = mapper.writeValueAsString(error);
-        response.getWriter().write(json);
-        response.getWriter().flush();
     }
 }

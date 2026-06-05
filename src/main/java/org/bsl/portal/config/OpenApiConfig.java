@@ -11,25 +11,25 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class OpenApiConfig {
 
+    private static final String SECURITY_SCHEME_NAME = "bearerAuth";
+
     @Bean
     public OpenAPI customOpenAPI() {
-        final String securitySchemeName = "bearerAuth";
-
         return new OpenAPI()
                 .info(new Info()
-                        .title("Price Comparison API - AUTO SWAGGER AUTH")
-                        .version("1.0.0")
-                        .description("""
-                    **AUTO-AUTHENTICATION FEATURE:**
-                    """))
-                .addSecurityItem(new SecurityRequirement().addList(securitySchemeName))
+                        .title("BSL Portal API")
+                        .version("1.0")
+                        .description("BSL Portal API with JWT Bearer Authentication"))
+                .addSecurityItem(new SecurityRequirement()
+                        .addList(SECURITY_SCHEME_NAME))
                 .components(new Components()
-                        .addSecuritySchemes(securitySchemeName,
+                        .addSecuritySchemes(
+                                SECURITY_SCHEME_NAME,
                                 new SecurityScheme()
-                                        .name("bearerAuth")
+                                        .name(SECURITY_SCHEME_NAME)
                                         .type(SecurityScheme.Type.HTTP)
                                         .scheme("bearer")
                                         .bearerFormat("JWT")
-                                        .in(SecurityScheme.In.HEADER)));
+                        ));
     }
 }
