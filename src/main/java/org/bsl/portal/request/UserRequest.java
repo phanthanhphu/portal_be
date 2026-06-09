@@ -8,6 +8,9 @@ public class UserRequest {
     public static final String APPROVE_DOCUMENT = "DOCUMENT";
     public static final String APPROVE_BOTH = "BOTH";
 
+    public static final String BOOKING_NONE = "NONE";
+    public static final String BOOKING_MANAGE = "BOOKING";
+
     private String username;
     private String email;
     private String password;
@@ -25,6 +28,13 @@ public class UserRequest {
      * BOTH     = can approve both notices and documents
      */
     private String approvePermission = APPROVE_NONE;
+
+    /**
+     * Permission for Room Booking feature.
+     * NONE    = cannot add/edit/delete/tick index room booking
+     * BOOKING = can manage room bookings
+     */
+    private String bookingPermission = BOOKING_NONE;
 
     private MultipartFile profileImage;
 
@@ -45,6 +55,20 @@ public class UserRequest {
         return APPROVE_NONE;
     }
 
+    private String normalizeBookingPermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return BOOKING_NONE;
+        }
+
+        String normalized = value.trim().toUpperCase();
+
+        if (BOOKING_MANAGE.equals(normalized) || BOOKING_NONE.equals(normalized)) {
+            return normalized;
+        }
+
+        return BOOKING_NONE;
+    }
+
     public boolean canApproveNotice() {
         String permission = normalizeApprovePermission(this.approvePermission);
         return APPROVE_NOTICE.equals(permission) || APPROVE_BOTH.equals(permission);
@@ -53,6 +77,10 @@ public class UserRequest {
     public boolean canApproveDocument() {
         String permission = normalizeApprovePermission(this.approvePermission);
         return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
+    }
+
+    public boolean canManageBooking() {
+        return BOOKING_MANAGE.equals(normalizeBookingPermission(this.bookingPermission));
     }
 
     // Getters and Setters
@@ -126,6 +154,14 @@ public class UserRequest {
 
     public void setApprovePermission(String approvePermission) {
         this.approvePermission = normalizeApprovePermission(approvePermission);
+    }
+
+    public String getBookingPermission() {
+        return normalizeBookingPermission(bookingPermission);
+    }
+
+    public void setBookingPermission(String bookingPermission) {
+        this.bookingPermission = normalizeBookingPermission(bookingPermission);
     }
 
     public MultipartFile getProfileImage() {

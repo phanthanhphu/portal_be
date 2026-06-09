@@ -12,17 +12,24 @@ public class UserDTO {
     private String profileImageUrl;
     private LocalDateTime createdAt;
     private boolean enabled;
+
     private String departmentId;
+    private String departmentName;
+    private String division;
+
     private String approvePermission = "NONE";
     private boolean canApproveNotice;
     private boolean canApproveDocument;
+
+    private String bookingPermission = "NONE";
+    private boolean canManageBooking;
 
     public String getId() {
         return id;
     }
 
     public void setId(String id) {
-        this.id = id;
+        this.id = clean(id);
     }
 
     public String getUsername() {
@@ -30,7 +37,7 @@ public class UserDTO {
     }
 
     public void setUsername(String username) {
-        this.username = username;
+        this.username = clean(username);
     }
 
     public String getEmail() {
@@ -38,7 +45,7 @@ public class UserDTO {
     }
 
     public void setEmail(String email) {
-        this.email = email;
+        this.email = clean(email);
     }
 
     public String getAddress() {
@@ -46,7 +53,7 @@ public class UserDTO {
     }
 
     public void setAddress(String address) {
-        this.address = address;
+        this.address = clean(address);
     }
 
     public String getPhone() {
@@ -54,7 +61,7 @@ public class UserDTO {
     }
 
     public void setPhone(String phone) {
-        this.phone = phone;
+        this.phone = clean(phone);
     }
 
     public String getRole() {
@@ -62,7 +69,7 @@ public class UserDTO {
     }
 
     public void setRole(String role) {
-        this.role = role;
+        this.role = clean(role);
     }
 
     public String getProfileImageUrl() {
@@ -70,7 +77,7 @@ public class UserDTO {
     }
 
     public void setProfileImageUrl(String profileImageUrl) {
-        this.profileImageUrl = profileImageUrl;
+        this.profileImageUrl = clean(profileImageUrl);
     }
 
     public LocalDateTime getCreatedAt() {
@@ -85,12 +92,12 @@ public class UserDTO {
         return enabled;
     }
 
-    public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
-    }
-
     public boolean getEnabled() {
         return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
     }
 
     public String getDepartmentId() {
@@ -98,7 +105,23 @@ public class UserDTO {
     }
 
     public void setDepartmentId(String departmentId) {
-        this.departmentId = departmentId;
+        this.departmentId = clean(departmentId);
+    }
+
+    public String getDepartmentName() {
+        return departmentName;
+    }
+
+    public void setDepartmentName(String departmentName) {
+        this.departmentName = clean(departmentName);
+    }
+
+    public String getDivision() {
+        return division;
+    }
+
+    public void setDivision(String division) {
+        this.division = clean(division);
     }
 
     public String getApprovePermission() {
@@ -133,6 +156,30 @@ public class UserDTO {
         this.canApproveDocument = canApproveDocument;
     }
 
+    public String getBookingPermission() {
+        return normalizeBookingPermission(bookingPermission);
+    }
+
+    public void setBookingPermission(String bookingPermission) {
+        this.bookingPermission = normalizeBookingPermission(bookingPermission);
+    }
+
+    public boolean isCanManageBooking() {
+        return canManageBooking;
+    }
+
+    public boolean getCanManageBooking() {
+        return canManageBooking;
+    }
+
+    public void setCanManageBooking(boolean canManageBooking) {
+        this.canManageBooking = canManageBooking;
+    }
+
+    private String clean(String value) {
+        return value == null ? "" : value.trim();
+    }
+
     private String normalizeApprovePermission(String value) {
         if (value == null || value.trim().isEmpty()) {
             return "NONE";
@@ -144,6 +191,20 @@ public class UserDTO {
                 || "NOTICE".equals(permission)
                 || "DOCUMENT".equals(permission)
                 || "BOTH".equals(permission)) {
+            return permission;
+        }
+
+        return "NONE";
+    }
+
+    private String normalizeBookingPermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "NONE";
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if ("NONE".equals(permission) || "BOOKING".equals(permission)) {
             return permission;
         }
 

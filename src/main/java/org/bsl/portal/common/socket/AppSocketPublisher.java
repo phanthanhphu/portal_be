@@ -49,6 +49,17 @@ public class AppSocketPublisher {
         publish("USER", action, id);
     }
 
+    // ===============================
+    // ROOM BOOKING REALTIME
+    // ===============================
+    public void roomBookingChanged(String action, String id) {
+        publish("ROOM_BOOKING", action, id);
+    }
+
+    public void roomChanged(String action, String id) {
+        publish("ROOM", action, id);
+    }
+
     /*
      * Added only for portal online count.
      * Existing /topic/app-events logic is unchanged.

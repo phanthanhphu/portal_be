@@ -32,6 +32,14 @@ public class User {
      */
     private String approvePermission = "NONE";
 
+    /**
+     * Booking permission for non-admin users.
+     * Allowed values:
+     * - NONE: cannot manage room bookings
+     * - BOOKING: can add/edit/delete room bookings and tick Index Room display
+     */
+    private String bookingPermission = "NONE";
+
     private String normalizeApprovePermission(String value) {
         if (value == null || value.trim().isEmpty()) {
             return "NONE";
@@ -49,14 +57,56 @@ public class User {
         return "NONE";
     }
 
+    private String normalizeBookingPermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "NONE";
+        }
+
+        String normalized = value.trim().toUpperCase();
+
+        if ("BOOKING".equals(normalized) || "NONE".equals(normalized)) {
+            return normalized;
+        }
+
+        return "NONE";
+    }
+
+    private boolean isAdminRole() {
+        if (this.role == null || this.role.trim().isEmpty()) {
+            return false;
+        }
+
+        String normalizedRole = this.role.trim().toUpperCase();
+
+        return "ADMIN".equals(normalizedRole)
+                || "ROLE_ADMIN".equals(normalizedRole);
+    }
+
     public boolean canApproveNotice() {
+        if (isAdminRole()) {
+            return true;
+        }
+
         String permission = normalizeApprovePermission(this.approvePermission);
         return "NOTICE".equals(permission) || "BOTH".equals(permission);
     }
 
     public boolean canApproveDocument() {
+        if (isAdminRole()) {
+            return true;
+        }
+
         String permission = normalizeApprovePermission(this.approvePermission);
         return "DOCUMENT".equals(permission) || "BOTH".equals(permission);
+    }
+
+    public boolean canManageBooking() {
+        if (isAdminRole()) {
+            return true;
+        }
+
+        String permission = normalizeBookingPermission(this.bookingPermission);
+        return "BOOKING".equals(permission);
     }
 
     // Getters and setters
@@ -162,5 +212,13 @@ public class User {
 
     public void setApprovePermission(String approvePermission) {
         this.approvePermission = normalizeApprovePermission(approvePermission);
+    }
+
+    public String getBookingPermission() {
+        return normalizeBookingPermission(bookingPermission);
+    }
+
+    public void setBookingPermission(String bookingPermission) {
+        this.bookingPermission = normalizeBookingPermission(bookingPermission);
     }
 }

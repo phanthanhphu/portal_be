@@ -80,6 +80,9 @@ public class UserController {
     public static final String APPROVE_DOCUMENT = "DOCUMENT";
     public static final String APPROVE_BOTH = "BOTH";
 
+    public static final String BOOKING_NONE = "NONE";
+    public static final String BOOKING_MANAGE = "BOOKING";
+
     // Set để lưu các token đã bị blacklist (để invalidate token khi logout)
     private final Set<String> blacklistedTokens = new HashSet<>();
 
@@ -136,6 +139,7 @@ public class UserController {
             user.setTokenVersion(1L);
             user.setDepartmentId(request.getDepartmentId());
             user.setApprovePermission(normalizeApprovePermission(request.getApprovePermission()));
+            user.setBookingPermission(normalizeBookingPermission(request.getBookingPermission()));
 
             Boolean isEnabled = request.getIsEnabled();
             user.setEnabled(isEnabled != null ? isEnabled : true);
@@ -226,7 +230,8 @@ public class UserController {
             @RequestParam(required = false, defaultValue = "") String phone,
             @RequestParam(required = false, defaultValue = "") String email,
             @RequestParam(required = false, defaultValue = "") String role,
-            @RequestParam(required = false, defaultValue = "") String approvePermission
+            @RequestParam(required = false, defaultValue = "") String approvePermission,
+            @RequestParam(required = false, defaultValue = "") String bookingPermission
     ) {
         try {
             Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Order.desc("createdAt")));
@@ -237,6 +242,7 @@ public class UserController {
                     email,
                     role,
                     normalizeApprovePermissionFilter(approvePermission),
+                    normalizeBookingPermissionFilter(bookingPermission),
                     pageable
             );
 
@@ -453,6 +459,11 @@ public class UserController {
                     request.getApprovePermission() != null
                             ? normalizeApprovePermission(request.getApprovePermission())
                             : normalizeApprovePermission(existingUser.getApprovePermission())
+            );
+            user.setBookingPermission(
+                    request.getBookingPermission() != null
+                            ? normalizeBookingPermission(request.getBookingPermission())
+                            : normalizeBookingPermission(existingUser.getBookingPermission())
             );
 
             Boolean isEnabled = request.getIsEnabled();
@@ -795,6 +806,38 @@ public class UserController {
         return "";
     }
 
+    private String normalizeBookingPermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return BOOKING_NONE;
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if (BOOKING_MANAGE.equals(permission) || BOOKING_NONE.equals(permission)) {
+            return permission;
+        }
+
+        return BOOKING_NONE;
+    }
+
+    private String normalizeBookingPermissionFilter(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "";
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if ("ALL".equals(permission)) {
+            return "";
+        }
+
+        if (BOOKING_MANAGE.equals(permission) || BOOKING_NONE.equals(permission)) {
+            return permission;
+        }
+
+        return "";
+    }
+
     private boolean isAdmin(User user) {
         if (user == null || user.getRole() == null) {
             return false;
@@ -827,31 +870,177 @@ public class UserController {
         return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
     }
 
+    private boolean canManageBooking(User user) {
+        if (isAdmin(user)) {
+            return true;
+        }
+
+        String permission = normalizeBookingPermission(user != null ? user.getBookingPermission() : null);
+
+        return BOOKING_MANAGE.equals(permission);
+    }
+
     private Map<String, Object> buildUserResponse(User user) {
         Map<String, Object> data = new LinkedHashMap<>();
+
+        String departmentId = user.getDepartmentId();
+        Map<String, Object> departmentMap = buildDepartmentResponse(departmentId);
+
+        String departmentName = "";
+        String division = "";
+
+        if (departmentMap != null) {
+            departmentName = safeString(departmentMap.get("departmentName"));
+            division = safeString(departmentMap.get("division"));
+        }
+
         data.put("id", user.getId());
         data.put("username", user.getUsername());
         data.put("email", user.getEmail());
         data.put("address", user.getAddress());
         data.put("phone", user.getPhone());
         data.put("role", user.getRole());
+
         data.put("approvePermission", normalizeApprovePermission(user.getApprovePermission()));
         data.put("canApproveNotice", canApproveNotice(user));
         data.put("canApproveDocument", canApproveDocument(user));
+
+        data.put("bookingPermission", normalizeBookingPermission(user.getBookingPermission()));
+        data.put("canManageBooking", canManageBooking(user));
+
         data.put("profileImageUrl", user.getProfileImageUrl());
         data.put("createdAt", user.getCreatedAt());
         data.put("enabled", user.isEnabled());
         data.put("isEnabled", user.isEnabled());
-        data.put("departmentId", user.getDepartmentId());
 
-        if (user.getDepartmentId() != null) {
-            Map<String, Object> departmentMap = new LinkedHashMap<>();
-            departmentMap.put("id", user.getDepartmentId());
-            data.put("department", departmentMap);
-        } else {
-            data.put("department", null);
-        }
+        data.put("departmentId", departmentId);
+        data.put("departmentName", departmentName);
+        data.put("division", division);
+        data.put("department", departmentMap);
 
         return data;
+    }
+
+    private Map<String, Object> buildDepartmentResponse(String departmentId) {
+        if (departmentId == null || departmentId.trim().isEmpty()) {
+            return null;
+        }
+
+        String cleanDepartmentId = departmentId.trim();
+
+        Map<String, Object> departmentMap = new LinkedHashMap<>();
+        departmentMap.put("id", cleanDepartmentId);
+
+        Object department = findDepartmentObject(cleanDepartmentId);
+
+        if (department == null) {
+            departmentMap.put("departmentName", "");
+            departmentMap.put("name", "");
+            departmentMap.put("division", "");
+            return departmentMap;
+        }
+
+        String departmentName = firstText(
+                invokeStringGetter(department, "getDepartmentName"),
+                invokeStringGetter(department, "getName"),
+                readStringField(department, "departmentName"),
+                readStringField(department, "name")
+        );
+
+        String division = firstText(
+                invokeStringGetter(department, "getDivision"),
+                readStringField(department, "division")
+        );
+
+        departmentMap.put("departmentName", departmentName);
+        departmentMap.put("name", departmentName);
+        departmentMap.put("division", division);
+
+        return departmentMap;
+    }
+
+    private Object findDepartmentObject(String departmentId) {
+        if (departmentService == null || departmentId == null || departmentId.trim().isEmpty()) {
+            return null;
+        }
+
+        String cleanDepartmentId = departmentId.trim();
+
+        String[] methodNames = {
+                "getById",
+                "findById",
+                "getDepartmentById",
+                "findDepartmentById"
+        };
+
+        for (String methodName : methodNames) {
+            try {
+                java.lang.reflect.Method method = departmentService.getClass().getMethod(methodName, String.class);
+                Object result = method.invoke(departmentService, cleanDepartmentId);
+
+                if (result instanceof Optional<?>) {
+                    return ((Optional<?>) result).orElse(null);
+                }
+
+                if (result instanceof ResponseEntity<?>) {
+                    return ((ResponseEntity<?>) result).getBody();
+                }
+
+                if (result != null) {
+                    return result;
+                }
+            } catch (Exception ignored) {
+                // Try next method name
+            }
+        }
+
+        return null;
+    }
+
+    private String invokeStringGetter(Object target, String methodName) {
+        if (target == null || methodName == null || methodName.trim().isEmpty()) {
+            return "";
+        }
+
+        try {
+            java.lang.reflect.Method method = target.getClass().getMethod(methodName);
+            Object value = method.invoke(target);
+            return safeString(value);
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private String readStringField(Object target, String fieldName) {
+        if (target == null || fieldName == null || fieldName.trim().isEmpty()) {
+            return "";
+        }
+
+        try {
+            java.lang.reflect.Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            Object value = field.get(target);
+            return safeString(value);
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private String firstText(String... values) {
+        if (values == null) {
+            return "";
+        }
+
+        for (String value : values) {
+            if (value != null && !value.trim().isEmpty()) {
+                return value.trim();
+            }
+        }
+
+        return "";
+    }
+
+    private String safeString(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
     }
 }

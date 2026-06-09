@@ -27,6 +27,9 @@ public class UserService {
     private static final String APPROVE_DOCUMENT = "DOCUMENT";
     private static final String APPROVE_BOTH = "BOTH";
 
+    private static final String BOOKING_NONE = "NONE";
+    private static final String BOOKING_MANAGE = "BOOKING";
+
     @Autowired
     private UserRepository userRepository;
 
@@ -39,6 +42,7 @@ public class UserService {
         }
 
         user.setApprovePermission(normalizeApprovePermission(user.getApprovePermission()));
+        user.setBookingPermission(normalizeBookingPermission(user.getBookingPermission()));
         return userRepository.save(user);
     }
 
@@ -73,13 +77,8 @@ public class UserService {
         existing.setTokenVersion(data.getTokenVersion() > 0 ? data.getTokenVersion() : existing.getTokenVersion());
         existing.setProfileImageUrl(data.getProfileImageUrl());
 
-        /*
-         * IMPORTANT:
-         * This line is the fix for "Approve Permission changes but does not save".
-         * The controller already receives approvePermission and passes it in User data,
-         * but the service must copy it onto the existing persistent user before save().
-         */
         existing.setApprovePermission(normalizeApprovePermission(data.getApprovePermission()));
+        existing.setBookingPermission(normalizeBookingPermission(data.getBookingPermission()));
 
         if (existing.getCreatedAt() == null) {
             existing.setCreatedAt(data.getCreatedAt() != null ? data.getCreatedAt() : LocalDateTime.now());
@@ -96,7 +95,7 @@ public class UserService {
             String role,
             Pageable pageable
     ) {
-        return filterUsers(username, address, phone, email, role, "", pageable);
+        return filterUsers(username, address, phone, email, role, "", "", pageable);
     }
 
     public Page<UserDTO> filterUsers(
@@ -106,6 +105,19 @@ public class UserService {
             String email,
             String role,
             String approvePermission,
+            Pageable pageable
+    ) {
+        return filterUsers(username, address, phone, email, role, approvePermission, "", pageable);
+    }
+
+    public Page<UserDTO> filterUsers(
+            String username,
+            String address,
+            String phone,
+            String email,
+            String role,
+            String approvePermission,
+            String bookingPermission,
             Pageable pageable
     ) {
         Query query = new Query();
@@ -145,6 +157,20 @@ public class UserService {
             }
         }
 
+        String normalizedBookingPermission = normalizeBookingPermissionFilter(bookingPermission);
+        if (StringUtils.hasText(normalizedBookingPermission)) {
+            if (BOOKING_NONE.equals(normalizedBookingPermission)) {
+                andCriterias.add(new Criteria().orOperator(
+                        Criteria.where("bookingPermission").is(BOOKING_NONE),
+                        Criteria.where("bookingPermission").exists(false),
+                        Criteria.where("bookingPermission").is(null),
+                        Criteria.where("bookingPermission").is("")
+                ));
+            } else {
+                andCriterias.add(Criteria.where("bookingPermission").is(normalizedBookingPermission));
+            }
+        }
+
         if (!andCriterias.isEmpty()) {
             query.addCriteria(new Criteria().andOperator(andCriterias.toArray(new Criteria[0])));
         }
@@ -174,6 +200,10 @@ public class UserService {
         dto.setApprovePermission(normalizeApprovePermission(user.getApprovePermission()));
         dto.setCanApproveNotice(canApproveNotice(user));
         dto.setCanApproveDocument(canApproveDocument(user));
+
+        dto.setBookingPermission(normalizeBookingPermission(user.getBookingPermission()));
+        dto.setCanManageBooking(canManageBooking(user));
+
         return dto;
     }
 
@@ -201,6 +231,10 @@ public class UserService {
 
         String permission = value.trim().toUpperCase();
 
+        if ("ALL".equals(permission)) {
+            return "";
+        }
+
         if (APPROVE_NOTICE.equals(permission)
                 || APPROVE_DOCUMENT.equals(permission)
                 || APPROVE_BOTH.equals(permission)
@@ -211,7 +245,39 @@ public class UserService {
         return "";
     }
 
-    private boolean isAdmin(User user) {
+    private String normalizeBookingPermission(String value) {
+        if (!StringUtils.hasText(value)) {
+            return BOOKING_NONE;
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if (BOOKING_MANAGE.equals(permission) || BOOKING_NONE.equals(permission)) {
+            return permission;
+        }
+
+        return BOOKING_NONE;
+    }
+
+    private String normalizeBookingPermissionFilter(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+
+        String permission = value.trim().toUpperCase();
+
+        if ("ALL".equals(permission)) {
+            return "";
+        }
+
+        if (BOOKING_MANAGE.equals(permission) || BOOKING_NONE.equals(permission)) {
+            return permission;
+        }
+
+        return "";
+    }
+
+    public boolean isAdmin(User user) {
         if (user == null || user.getRole() == null) {
             return false;
         }
@@ -239,5 +305,14 @@ public class UserService {
 
         String permission = normalizeApprovePermission(user != null ? user.getApprovePermission() : null);
         return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
+    }
+
+    public boolean canManageBooking(User user) {
+        if (isAdmin(user)) {
+            return true;
+        }
+
+        String permission = normalizeBookingPermission(user != null ? user.getBookingPermission() : null);
+        return BOOKING_MANAGE.equals(permission);
     }
 }
