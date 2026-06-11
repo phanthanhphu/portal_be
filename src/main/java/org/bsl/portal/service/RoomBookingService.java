@@ -33,6 +33,8 @@ import java.util.stream.Collectors;
 @Service
 public class RoomBookingService {
 
+    private static final long ROOM_BOOKING_BUFFER_MINUTES = 30L;
+
     @Autowired
     private RoomBookingRepository repository;
 
@@ -111,10 +113,10 @@ public class RoomBookingService {
     // ==================== GET ALL ROOM BOOKINGS ====================
     public List<RoomBookingDto> getAll() {
         return repository.findAll(
-                        Sort.by(Sort.Direction.DESC, "checkInDate")
-                                .and(Sort.by(Sort.Direction.DESC, "checkInTime"))
-                                .and(Sort.by(Sort.Direction.DESC, "createdAt"))
-                )
+                Sort.by(Sort.Direction.DESC, "checkInDate")
+                        .and(Sort.by(Sort.Direction.DESC, "checkInTime"))
+                        .and(Sort.by(Sort.Direction.DESC, "createdAt"))
+        )
                 .stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
@@ -312,7 +314,6 @@ public class RoomBookingService {
             throw new IllegalArgumentException("Title must be less than or equal to 200 characters");
         }
 
-
         if (booking.getRoomId() == null || booking.getRoomId().trim().isEmpty()) {
             throw new IllegalArgumentException("Room id is required");
         }
@@ -392,9 +393,15 @@ public class RoomBookingService {
         return amount.setScale(0, RoundingMode.UNNECESSARY);
     }
 
-    // Không được đặt cùng phòng trong khoảng thời gian bị trùng.
-    // Dùng interval [start, end): nếu booking cũ checkout 13:00,
-    // booking mới checkin 13:00 hoặc 13:30 đều hợp lệ.
+    // Không được đặt cùng phòng nếu bị trùng thời gian
+    // hoặc chưa cách checkout/checkin tối thiểu 30 phút.
+    //
+    // Quy ước:
+    // - Nếu booking mới nằm sau booking cũ:
+    //   newCheckInAt >= existingCheckOutAt + 30 phút
+    //
+    // - Nếu booking mới nằm trước booking cũ:
+    //   existingCheckInAt >= newCheckOutAt + 30 phút
     private void validateNoRoomDateConflict(String currentBookingId, RoomBooking booking) {
         LocalDateTime newCheckInAt = toDateTime(
                 booking.getCheckInDate(),
@@ -413,6 +420,7 @@ public class RoomBookingService {
                 continue;
             }
 
+            // Khi update thì bỏ qua chính booking hiện tại
             if (currentBookingId != null && currentBookingId.equals(existing.getId())) {
                 continue;
             }
@@ -428,11 +436,21 @@ public class RoomBookingService {
                 continue;
             }
 
-            boolean overlap =
-                    newCheckInAt.isBefore(existingCheckOutAt)
-                            && newCheckOutAt.isAfter(existingCheckInAt);
+            LocalDateTime allowedCheckInAfterExisting =
+                    existingCheckOutAt.plusMinutes(ROOM_BOOKING_BUFFER_MINUTES);
 
-            if (overlap) {
+            LocalDateTime allowedExistingCheckInAfterNew =
+                    newCheckOutAt.plusMinutes(ROOM_BOOKING_BUFFER_MINUTES);
+
+            boolean newBookingIsAfterExisting =
+                    !newCheckInAt.isBefore(allowedCheckInAfterExisting);
+
+            boolean newBookingIsBeforeExisting =
+                    !existingCheckInAt.isBefore(allowedExistingCheckInAfterNew);
+
+            boolean conflict = !newBookingIsAfterExisting && !newBookingIsBeforeExisting;
+
+            if (conflict) {
                 throw new IllegalArgumentException(
                         "This room is already booked from "
                                 + existing.getCheckInDate()
@@ -442,6 +460,12 @@ public class RoomBookingService {
                                 + existing.getCheckOutDate()
                                 + " "
                                 + formatTime(existing.getCheckOutTime())
+                                + ". New booking must be at least "
+                                + ROOM_BOOKING_BUFFER_MINUTES
+                                + " minutes apart from existing booking. Earliest valid check-in after this booking is "
+                                + allowedCheckInAfterExisting.toLocalDate()
+                                + " "
+                                + formatTime(allowedCheckInAfterExisting.toLocalTime())
                 );
             }
         }
