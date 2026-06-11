@@ -148,8 +148,8 @@ public class SecurityConfig {
                 "http://10.232.100.68:8081",
                 "https://10.232.100.68:3001",
                 "https://10.232.100.68:8081",
-                "http://10.218.20.165:3001",
-                "http://10.218.20.165:8081",
+                "http://10.232.132.60:3001",
+                "http://10.232.132.60:8081",
                 "https://homepage.youngone.com.vn",
                 "https://homepage.youngone.com.vn:3001",
                 "https://homepage.youngone.com.vn:8081"

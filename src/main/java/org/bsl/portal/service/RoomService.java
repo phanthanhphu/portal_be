@@ -1,6 +1,7 @@
 package org.bsl.portal.service;
 
 import org.bsl.portal.model.Room;
+import org.bsl.portal.repository.RoomBookingRepository;
 import org.bsl.portal.repository.RoomRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
@@ -20,6 +21,9 @@ public class RoomService {
 
     @Autowired
     private RoomRepository repository;
+
+    @Autowired
+    private RoomBookingRepository roomBookingRepository;
 
     // ==================== CREATE ROOM ====================
     public Room create(Room room) {
@@ -53,6 +57,11 @@ public class RoomService {
 
         String roomName = room.getRoomName().trim();
 
+        if (repository.existsByRoomNameIgnoreCase(roomName)
+                && !roomName.equalsIgnoreCase(existing.getRoomName())) {
+            throw new IllegalArgumentException("Room name already exists");
+        }
+
         existing.setRoomName(roomName);
         existing.setUpdatedAt(LocalDateTime.now());
 
@@ -66,8 +75,18 @@ public class RoomService {
             throw new IllegalArgumentException("Room id is required");
         }
 
-        Room existing = repository.findById(id)
+        String roomId = id.trim();
+
+        Room existing = repository.findById(roomId)
                 .orElseThrow(() -> new NoSuchElementException("Room not found"));
+
+        boolean roomIsUsed = roomBookingRepository.existsByRoomId(roomId);
+
+        if (roomIsUsed) {
+            throw new IllegalArgumentException(
+                    "Cannot delete this room because it is already used in room bookings"
+            );
+        }
 
         repository.delete(existing);
     }

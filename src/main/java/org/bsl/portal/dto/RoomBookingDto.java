@@ -3,6 +3,7 @@ package org.bsl.portal.dto;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 public class RoomBookingDto {
 
@@ -11,7 +12,9 @@ public class RoomBookingDto {
     private String roomId;
     private String roomName;
     private LocalDate checkInDate;
+    private LocalTime checkInTime;
     private LocalDate checkOutDate;
+    private LocalTime checkOutTime;
     private String peopleInCharge;
     private String basedLocation;
     private BigDecimal roomCharged;
@@ -23,6 +26,7 @@ public class RoomBookingDto {
     public RoomBookingDto() {
     }
 
+    // Constructor cũ: giữ lại để tránh lỗi compile nếu chỗ khác vẫn đang gọi constructor này.
     public RoomBookingDto(
             String id,
             String title,
@@ -38,12 +42,51 @@ public class RoomBookingDto {
             LocalDateTime createdAt,
             LocalDateTime updatedAt
     ) {
+        this(
+                id,
+                title,
+                roomId,
+                roomName,
+                checkInDate,
+                null,
+                checkOutDate,
+                null,
+                peopleInCharge,
+                basedLocation,
+                roomCharged,
+                showOnIndexRoom,
+                createdBy,
+                createdAt,
+                updatedAt
+        );
+    }
+
+    // Constructor mới: có checkInTime, checkOutTime.
+    public RoomBookingDto(
+            String id,
+            String title,
+            String roomId,
+            String roomName,
+            LocalDate checkInDate,
+            LocalTime checkInTime,
+            LocalDate checkOutDate,
+            LocalTime checkOutTime,
+            String peopleInCharge,
+            String basedLocation,
+            BigDecimal roomCharged,
+            Boolean showOnIndexRoom,
+            String createdBy,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
+    ) {
         this.id = id;
         this.title = title;
         this.roomId = roomId;
         this.roomName = roomName;
         this.checkInDate = checkInDate;
+        this.checkInTime = checkInTime;
         this.checkOutDate = checkOutDate;
+        this.checkOutTime = checkOutTime;
         this.peopleInCharge = peopleInCharge;
         this.basedLocation = basedLocation;
         this.roomCharged = roomCharged;
@@ -93,12 +136,28 @@ public class RoomBookingDto {
         this.checkInDate = checkInDate;
     }
 
+    public LocalTime getCheckInTime() {
+        return checkInTime;
+    }
+
+    public void setCheckInTime(LocalTime checkInTime) {
+        this.checkInTime = checkInTime;
+    }
+
     public LocalDate getCheckOutDate() {
         return checkOutDate;
     }
 
     public void setCheckOutDate(LocalDate checkOutDate) {
         this.checkOutDate = checkOutDate;
+    }
+
+    public LocalTime getCheckOutTime() {
+        return checkOutTime;
+    }
+
+    public void setCheckOutTime(LocalTime checkOutTime) {
+        this.checkOutTime = checkOutTime;
     }
 
     public String getPeopleInCharge() {

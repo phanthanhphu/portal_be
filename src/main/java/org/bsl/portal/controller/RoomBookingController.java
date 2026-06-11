@@ -6,10 +6,12 @@ import org.bsl.portal.model.RoomBooking;
 import org.bsl.portal.service.RoomBookingService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -137,15 +139,39 @@ public class RoomBookingController {
     }
 
     // ==================== SEARCH ROOM BOOKINGS WITH PAGINATION ====================
+    // Search được theo: name, roomId, fromDate/toDate.
+    // Có hỗ trợ thêm formDate để tránh lỗi FE gửi nhầm chính tả thay vì fromDate.
     @GetMapping("/search")
     public ResponseEntity<?> search(
             @RequestParam(required = false) String name,
             @RequestParam(required = false) String roomId,
+
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate fromDate,
+
+            @RequestParam(required = false, name = "formDate")
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate formDate,
+
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate toDate,
+
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size
     ) {
         try {
-            Page<RoomBookingDto> result = service.search(name, roomId, page, size);
+            LocalDate effectiveFromDate = fromDate != null ? fromDate : formDate;
+
+            Page<RoomBookingDto> result = service.search(
+                    name,
+                    roomId,
+                    effectiveFromDate,
+                    toDate,
+                    page,
+                    size
+            );
 
             Map<String, Object> body = new HashMap<>();
             body.put("content", result.getContent());
@@ -159,6 +185,9 @@ public class RoomBookingController {
             body.put("last", result.isLast());
 
             return ResponseEntity.ok(body);
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(message(e.getMessage()));
 
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)

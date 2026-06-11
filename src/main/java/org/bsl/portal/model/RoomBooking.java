@@ -6,6 +6,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 @Document(collection = "room_bookings")
 public class RoomBooking {
@@ -13,10 +14,15 @@ public class RoomBooking {
     @Id
     private String id;
 
+    // Có thể dùng làm tiêu đề booking hoặc tên khách nếu FE cũ đang dùng title.
     private String title;
+
+
     private String roomId;
     private LocalDate checkInDate;
+    private LocalTime checkInTime;
     private LocalDate checkOutDate;
+    private LocalTime checkOutTime;
     private String peopleInCharge;
     private String basedLocation;
 
@@ -49,6 +55,7 @@ public class RoomBooking {
         this.title = title;
     }
 
+
     public String getRoomId() {
         return roomId;
     }
@@ -65,12 +72,28 @@ public class RoomBooking {
         this.checkInDate = checkInDate;
     }
 
+    public LocalTime getCheckInTime() {
+        return checkInTime;
+    }
+
+    public void setCheckInTime(LocalTime checkInTime) {
+        this.checkInTime = checkInTime;
+    }
+
     public LocalDate getCheckOutDate() {
         return checkOutDate;
     }
 
     public void setCheckOutDate(LocalDate checkOutDate) {
         this.checkOutDate = checkOutDate;
+    }
+
+    public LocalTime getCheckOutTime() {
+        return checkOutTime;
+    }
+
+    public void setCheckOutTime(LocalTime checkOutTime) {
+        this.checkOutTime = checkOutTime;
     }
 
     public String getPeopleInCharge() {
