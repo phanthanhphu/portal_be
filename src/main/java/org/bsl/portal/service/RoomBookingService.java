@@ -2,8 +2,10 @@ package org.bsl.portal.service;
 
 import org.bsl.portal.dto.RoomBookingDto;
 import org.bsl.portal.model.Room;
+import org.bsl.portal.model.Location;
 import org.bsl.portal.model.RoomBooking;
 import org.bsl.portal.repository.RoomBookingRepository;
+import org.bsl.portal.repository.LocationRepository;
 import org.bsl.portal.repository.RoomRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
@@ -42,11 +44,16 @@ public class RoomBookingService {
     private RoomRepository roomRepository;
 
     @Autowired
+    private LocationRepository locationRepository;
+
+    @Autowired
     private MongoTemplate mongoTemplate;
 
     // ==================== CREATE ROOM BOOKING ====================
     public RoomBooking create(RoomBooking booking) {
+        syncLocationToBooking(booking);
         validateBooking(null, booking);
+        validateBookingDateNotPastForCreate(booking);
 
         booking.setId(null);
         booking.setTitle(trimRequired(booking.getTitle()));
@@ -54,6 +61,7 @@ public class RoomBookingService {
         booking.setCheckInTime(normalizeTime(booking.getCheckInTime()));
         booking.setCheckOutTime(normalizeTime(booking.getCheckOutTime()));
         booking.setPeopleInCharge(trimToNull(booking.getPeopleInCharge()));
+        booking.setLocationId(trimToNull(booking.getLocationId()));
         booking.setBasedLocation(trimToNull(booking.getBasedLocation()));
         booking.setRoomCharged(normalizeVndAmount(booking.getRoomCharged()));
         booking.setShowOnIndexRoom(Boolean.FALSE);
@@ -73,6 +81,7 @@ public class RoomBookingService {
         RoomBooking existing = repository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Room booking not found"));
 
+        syncLocationToBooking(booking);
         validateBooking(id, booking);
 
         existing.setTitle(trimRequired(booking.getTitle()));
@@ -82,6 +91,7 @@ public class RoomBookingService {
         existing.setCheckOutDate(booking.getCheckOutDate());
         existing.setCheckOutTime(normalizeTime(booking.getCheckOutTime()));
         existing.setPeopleInCharge(trimToNull(booking.getPeopleInCharge()));
+        existing.setLocationId(trimToNull(booking.getLocationId()));
         existing.setBasedLocation(trimToNull(booking.getBasedLocation()));
         existing.setRoomCharged(normalizeVndAmount(booking.getRoomCharged()));
 
@@ -138,6 +148,7 @@ public class RoomBookingService {
     public Page<RoomBookingDto> search(
             String name,
             String roomId,
+            String locationId,
             LocalDate fromDate,
             LocalDate toDate,
             int page,
@@ -162,6 +173,26 @@ public class RoomBookingService {
 
         if (roomId != null && !roomId.trim().isEmpty()) {
             criteriaList.add(Criteria.where("roomId").is(roomId.trim()));
+        }
+
+        String normalizedLocationId = trimToNull(locationId);
+
+        if (normalizedLocationId != null) {
+            String locationName = locationRepository.findById(normalizedLocationId)
+                    .map(Location::getLocation)
+                    .orElse(null);
+
+            if (locationName != null && !locationName.trim().isEmpty()) {
+                /*
+                 * Hỗ trợ cả dữ liệu mới có locationId và dữ liệu cũ chỉ có basedLocation dạng text.
+                 */
+                criteriaList.add(new Criteria().orOperator(
+                        Criteria.where("locationId").is(normalizedLocationId),
+                        Criteria.where("basedLocation").is(locationName.trim())
+                ));
+            } else {
+                criteriaList.add(Criteria.where("locationId").is(normalizedLocationId));
+            }
         }
 
         String keyword = trimToNull(name);
@@ -285,7 +316,8 @@ public class RoomBookingService {
         dto.setCheckOutDate(booking.getCheckOutDate());
         dto.setCheckOutTime(booking.getCheckOutTime());
         dto.setPeopleInCharge(booking.getPeopleInCharge());
-        dto.setBasedLocation(booking.getBasedLocation());
+        dto.setLocationId(booking.getLocationId());
+        dto.setBasedLocation(resolveLocationName(booking));
         dto.setRoomCharged(booking.getRoomCharged());
         dto.setShowOnIndexRoom(Boolean.TRUE.equals(booking.getShowOnIndexRoom()));
         dto.setCreatedBy(booking.getCreatedBy());
@@ -298,6 +330,66 @@ public class RoomBookingService {
         }
 
         return dto;
+    }
+
+
+    // ==================== LOCATION LINK ====================
+    private Location getLocationByIdOrThrow(String locationId) {
+        String normalizedLocationId = trimToNull(locationId);
+
+        if (normalizedLocationId == null) {
+            return null;
+        }
+
+        return locationRepository.findById(normalizedLocationId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Location with ID " + normalizedLocationId + " does not exist"
+                ));
+    }
+
+    /*
+     * FE mới gửi locationId.
+     * Backend sẽ tự lấy tên location trong master data và set vào basedLocation.
+     * basedLocation vẫn được giữ lại để tương thích màn hình list/export/index-room cũ.
+     */
+    private void syncLocationToBooking(RoomBooking booking) {
+        if (booking == null) {
+            return;
+        }
+
+        String normalizedLocationId = trimToNull(booking.getLocationId());
+
+        if (normalizedLocationId == null) {
+            /*
+             * Tương thích dữ liệu/FE cũ:
+             * Nếu chưa gửi locationId thì vẫn cho dùng basedLocation dạng text.
+             */
+            booking.setLocationId(null);
+            booking.setBasedLocation(trimToNull(booking.getBasedLocation()));
+            return;
+        }
+
+        Location location = getLocationByIdOrThrow(normalizedLocationId);
+
+        booking.setLocationId(location.getId());
+        booking.setBasedLocation(trimToNull(location.getLocation()));
+    }
+
+    private String resolveLocationName(RoomBooking booking) {
+        if (booking == null) {
+            return null;
+        }
+
+        String normalizedLocationId = trimToNull(booking.getLocationId());
+
+        if (normalizedLocationId == null) {
+            return booking.getBasedLocation();
+        }
+
+        return locationRepository.findById(normalizedLocationId)
+                .map(Location::getLocation)
+                .filter(value -> value != null && !value.trim().isEmpty())
+                .orElse(booking.getBasedLocation());
     }
 
     // ==================== VALIDATE ====================
@@ -366,6 +458,20 @@ public class RoomBookingService {
         validateVndAmount(booking.getRoomCharged());
 
         validateNoRoomDateConflict(currentBookingId, booking);
+    }
+
+    // Chỉ áp dụng cho CREATE.
+    // Dữ liệu cũ vẫn được phép EDIT lại dù check-in/check-out là ngày quá khứ.
+    private void validateBookingDateNotPastForCreate(RoomBooking booking) {
+        LocalDate today = LocalDate.now();
+
+        if (booking.getCheckInDate() != null && booking.getCheckInDate().isBefore(today)) {
+            throw new IllegalArgumentException("Check-in date cannot be in the past");
+        }
+
+        if (booking.getCheckOutDate() != null && booking.getCheckOutDate().isBefore(today)) {
+            throw new IllegalArgumentException("Check-out date cannot be in the past");
+        }
     }
 
     // ==================== VND VALIDATION ====================

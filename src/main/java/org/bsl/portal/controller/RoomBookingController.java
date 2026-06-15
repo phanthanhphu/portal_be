@@ -139,24 +139,25 @@ public class RoomBookingController {
     }
 
     // ==================== SEARCH ROOM BOOKINGS WITH PAGINATION ====================
-    // Search được theo: name, roomId, fromDate/toDate.
+    // Search được theo: name, roomId, locationId, fromDate/toDate.
     // Có hỗ trợ thêm formDate để tránh lỗi FE gửi nhầm chính tả thay vì fromDate.
     @GetMapping("/search")
     public ResponseEntity<?> search(
             @RequestParam(required = false) String name,
             @RequestParam(required = false) String roomId,
+            @RequestParam(required = false) String locationId,
 
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-            LocalDate fromDate,
+                    LocalDate fromDate,
 
             @RequestParam(required = false, name = "formDate")
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-            LocalDate formDate,
+                    LocalDate formDate,
 
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-            LocalDate toDate,
+                    LocalDate toDate,
 
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size
@@ -167,6 +168,7 @@ public class RoomBookingController {
             Page<RoomBookingDto> result = service.search(
                     name,
                     roomId,
+                    locationId,
                     effectiveFromDate,
                     toDate,
                     page,

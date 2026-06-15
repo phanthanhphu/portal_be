@@ -16,6 +16,7 @@ public class RoomBookingDto {
     private LocalDate checkOutDate;
     private LocalTime checkOutTime;
     private String peopleInCharge;
+    private String locationId;
     private String basedLocation;
     private BigDecimal roomCharged;
     private Boolean showOnIndexRoom;
@@ -52,6 +53,7 @@ public class RoomBookingDto {
                 checkOutDate,
                 null,
                 peopleInCharge,
+                null,
                 basedLocation,
                 roomCharged,
                 showOnIndexRoom,
@@ -72,6 +74,7 @@ public class RoomBookingDto {
             LocalDate checkOutDate,
             LocalTime checkOutTime,
             String peopleInCharge,
+            String locationId,
             String basedLocation,
             BigDecimal roomCharged,
             Boolean showOnIndexRoom,
@@ -88,12 +91,51 @@ public class RoomBookingDto {
         this.checkOutDate = checkOutDate;
         this.checkOutTime = checkOutTime;
         this.peopleInCharge = peopleInCharge;
+        this.locationId = locationId;
         this.basedLocation = basedLocation;
         this.roomCharged = roomCharged;
         this.showOnIndexRoom = showOnIndexRoom;
         this.createdBy = createdBy;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
+    }
+
+    // Constructor tương thích: nếu code cũ chưa truyền locationId.
+    public RoomBookingDto(
+            String id,
+            String title,
+            String roomId,
+            String roomName,
+            LocalDate checkInDate,
+            LocalTime checkInTime,
+            LocalDate checkOutDate,
+            LocalTime checkOutTime,
+            String peopleInCharge,
+            String basedLocation,
+            BigDecimal roomCharged,
+            Boolean showOnIndexRoom,
+            String createdBy,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
+    ) {
+        this(
+                id,
+                title,
+                roomId,
+                roomName,
+                checkInDate,
+                checkInTime,
+                checkOutDate,
+                checkOutTime,
+                peopleInCharge,
+                null,
+                basedLocation,
+                roomCharged,
+                showOnIndexRoom,
+                createdBy,
+                createdAt,
+                updatedAt
+        );
     }
 
     public String getId() {
@@ -166,6 +208,14 @@ public class RoomBookingDto {
 
     public void setPeopleInCharge(String peopleInCharge) {
         this.peopleInCharge = peopleInCharge;
+    }
+
+    public String getLocationId() {
+        return locationId;
+    }
+
+    public void setLocationId(String locationId) {
+        this.locationId = locationId;
     }
 
     public String getBasedLocation() {

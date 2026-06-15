@@ -13,6 +13,10 @@ public interface RoomBookingRepository extends MongoRepository<RoomBooking, Stri
 
     boolean existsByRoomId(String roomId);
 
+    List<RoomBooking> findByLocationId(String locationId);
+
+    boolean existsByLocationId(String locationId);
+
     List<RoomBooking> findByShowOnIndexRoom(Boolean showOnIndexRoom, Sort sort);
 
     List<RoomBooking> findByCheckInDateLessThanEqualAndCheckOutDateGreaterThanEqual(

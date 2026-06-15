@@ -24,6 +24,13 @@ public class RoomBooking {
     private LocalDate checkOutDate;
     private LocalTime checkOutTime;
     private String peopleInCharge;
+
+    // ID của Location master data.
+    // FE gửi field này khi đặt phòng.
+    private String locationId;
+
+    // Tên location hiển thị. Backend sẽ tự sync từ locationId.
+    // Giữ lại field này để tương thích dữ liệu/FE cũ.
     private String basedLocation;
 
     // VND amount. Store as whole number, no decimals.
@@ -102,6 +109,14 @@ public class RoomBooking {
 
     public void setPeopleInCharge(String peopleInCharge) {
         this.peopleInCharge = peopleInCharge;
+    }
+
+    public String getLocationId() {
+        return locationId;
+    }
+
+    public void setLocationId(String locationId) {
+        this.locationId = locationId;
     }
 
     public String getBasedLocation() {
