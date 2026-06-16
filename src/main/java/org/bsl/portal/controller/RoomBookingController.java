@@ -139,8 +139,9 @@ public class RoomBookingController {
     }
 
     // ==================== SEARCH ROOM BOOKINGS WITH PAGINATION ====================
-    // Search được theo: name, roomId, locationId, fromDate/toDate.
-    // Có hỗ trợ thêm formDate để tránh lỗi FE gửi nhầm chính tả thay vì fromDate.
+    // Search kết hợp theo: name, roomId, locationId, fromDate, toDate.
+    // Logic ngày: booking nằm trọn trong khoảng
+    // checkInDate >= fromDate AND checkOutDate <= toDate.
     @GetMapping("/search")
     public ResponseEntity<?> search(
             @RequestParam(required = false) String name,
@@ -151,6 +152,7 @@ public class RoomBookingController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
                     LocalDate fromDate,
 
+            // Giữ alias formDate để không lỗi nếu FE cũ gõ nhầm formDate.
             @RequestParam(required = false, name = "formDate")
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
                     LocalDate formDate,

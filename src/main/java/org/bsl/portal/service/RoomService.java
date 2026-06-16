@@ -50,8 +50,14 @@ public class RoomService {
             throw new IllegalArgumentException("Room id is required");
         }
 
-        Room existing = repository.findById(id)
+        String roomId = id.trim();
+
+        Room existing = repository.findById(roomId)
                 .orElseThrow(() -> new NoSuchElementException("Room not found"));
+
+        // Không cho sửa phòng đã được sử dụng trong Room Booking.
+        // Việc chặn ở service giúp an toàn kể cả khi user gọi API trực tiếp, không qua FE.
+        validateRoomNotUsed(roomId, "edit");
 
         validateRoom(room);
 
@@ -80,15 +86,43 @@ public class RoomService {
         Room existing = repository.findById(roomId)
                 .orElseThrow(() -> new NoSuchElementException("Room not found"));
 
+        // Không cho xóa phòng đã được sử dụng trong Room Booking.
+        validateRoomNotUsed(roomId, "delete");
+
+        repository.delete(existing);
+    }
+
+    // ==================== CHECK ROOM USED ====================
+    public boolean isRoomUsed(String id) {
+        if (id == null || id.trim().isEmpty()) {
+            throw new IllegalArgumentException("Room id is required");
+        }
+
+        String roomId = id.trim();
+
+        if (!repository.existsById(roomId)) {
+            throw new NoSuchElementException("Room not found");
+        }
+
+        return roomBookingRepository.existsByRoomId(roomId);
+    }
+
+    private void validateRoomNotUsed(String roomId, String action) {
         boolean roomIsUsed = roomBookingRepository.existsByRoomId(roomId);
 
-        if (roomIsUsed) {
+        if (!roomIsUsed) {
+            return;
+        }
+
+        if ("edit".equalsIgnoreCase(action)) {
             throw new IllegalArgumentException(
-                    "Cannot delete this room because it is already used in room bookings"
+                    "Cannot edit this room because it is already used in room bookings"
             );
         }
 
-        repository.delete(existing);
+        throw new IllegalArgumentException(
+                "Cannot delete this room because it is already used in room bookings"
+        );
     }
 
     // ==================== GET ALL ROOMS ====================
@@ -102,7 +136,7 @@ public class RoomService {
             throw new IllegalArgumentException("Room id is required");
         }
 
-        return repository.findById(id)
+        return repository.findById(id.trim())
                 .orElseThrow(() -> new NoSuchElementException("Room not found"));
     }
 

@@ -145,6 +145,24 @@ public class RoomBookingService {
     }
 
     // ==================== SEARCH ROOM BOOKINGS WITH PAGINATION ====================
+    /*
+     * Search kết hợp nhiều tiêu chí:
+     * - name: tìm trong title theo kiểu contains, không phân biệt hoa/thường.
+     * - roomId: lọc theo phòng.
+     * - locationId: lọc theo locationId, hỗ trợ dữ liệu cũ basedLocation text.
+     * - fromDate/toDate: lọc booking nằm trọn trong khoảng ngày.
+     *
+     * Logic ngày theo yêu cầu:
+     * - fromDate => checkInDate  >= fromDate
+     * - toDate   => checkOutDate <= toDate
+     *
+     * Ví dụ search 26/04 đến 25/06:
+     * - checkInDate  >= 2026-04-26
+     * - checkOutDate <= 2026-06-25
+     *
+     * Các điều kiện được AND với nhau, nên user có thể search kết hợp:
+     * name + room + location + fromDate + toDate.
+     */
     public Page<RoomBookingDto> search(
             String name,
             String roomId,
@@ -157,9 +175,7 @@ public class RoomBookingService {
         int safePage = Math.max(page, 0);
         int safeSize = size <= 0 ? 10 : Math.min(size, 100);
 
-        if (fromDate != null && toDate != null && toDate.isBefore(fromDate)) {
-            throw new IllegalArgumentException("To date must be after or equal to from date");
-        }
+        validateDateRange(fromDate, toDate, "To date must be after or equal to from date");
 
         Pageable pageable = PageRequest.of(
                 safePage,
@@ -185,10 +201,16 @@ public class RoomBookingService {
             if (locationName != null && !locationName.trim().isEmpty()) {
                 /*
                  * Hỗ trợ cả dữ liệu mới có locationId và dữ liệu cũ chỉ có basedLocation dạng text.
+                 * Regex exact, không phân biệt hoa/thường và bỏ qua khoảng trắng đầu/cuối.
                  */
+                Pattern locationRegex = Pattern.compile(
+                        "^\\s*" + Pattern.quote(locationName.trim()) + "\\s*$",
+                        Pattern.CASE_INSENSITIVE
+                );
+
                 criteriaList.add(new Criteria().orOperator(
                         Criteria.where("locationId").is(normalizedLocationId),
-                        Criteria.where("basedLocation").is(locationName.trim())
+                        Criteria.where("basedLocation").regex(locationRegex)
                 ));
             } else {
                 criteriaList.add(Criteria.where("locationId").is(normalizedLocationId));
@@ -198,23 +220,26 @@ public class RoomBookingService {
         String keyword = trimToNull(name);
 
         if (keyword != null) {
-            Pattern regex = Pattern.compile(Pattern.quote(keyword), Pattern.CASE_INSENSITIVE);
-
-            criteriaList.add(new Criteria().orOperator(
-                    Criteria.where("title").regex(regex),
-                    Criteria.where("peopleInCharge").regex(regex),
-                    Criteria.where("basedLocation").regex(regex)
-            ));
+            /*
+             * Search bằng MongoDB query, không filter bằng Java.
+             * VD: search "o" sẽ match "Mr. Bao", "Mr. Ho".
+             */
+            String regexText = ".*" + Pattern.quote(keyword) + ".*";
+            criteriaList.add(Criteria.where("title").regex(regexText, "i"));
         }
 
-        // Lọc các booking có giao với khoảng ngày tìm kiếm.
-        // VD: search 2026-06-01 -> 2026-06-05 sẽ lấy booking còn nằm trong khoảng này.
-        if (fromDate != null) {
-            criteriaList.add(Criteria.where("checkOutDate").gte(fromDate));
-        }
-
-        if (toDate != null) {
-            criteriaList.add(Criteria.where("checkInDate").lte(toDate));
+        /*
+         * Search ngày theo logic booking nằm trọn trong khoảng:
+         * - checkInDate  >= fromDate
+         * - checkOutDate <= toDate
+         */
+        if (fromDate != null && toDate != null) {
+            criteriaList.add(Criteria.where("checkInDate").gte(fromDate));
+            criteriaList.add(Criteria.where("checkOutDate").lte(toDate));
+        } else if (fromDate != null) {
+            criteriaList.add(Criteria.where("checkInDate").gte(fromDate));
+        } else if (toDate != null) {
+            criteriaList.add(Criteria.where("checkOutDate").lte(toDate));
         }
 
         Query countQuery = new Query();
@@ -237,6 +262,12 @@ public class RoomBookingService {
                 .collect(Collectors.toList());
 
         return new PageImpl<>(dtoList, pageable, total);
+    }
+
+    private void validateDateRange(LocalDate fromDate, LocalDate toDate, String message) {
+        if (fromDate != null && toDate != null && toDate.isBefore(fromDate)) {
+            throw new IllegalArgumentException(message);
+        }
     }
 
     // ==================== GET BOOKINGS BY ROOM ID ====================

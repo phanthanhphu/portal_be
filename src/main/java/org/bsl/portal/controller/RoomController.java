@@ -103,9 +103,36 @@ public class RoomController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(Map.of("message", e.getMessage()));
 
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("message", e.getMessage()));
+
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("message", "Fetch room failed: " + e.getMessage()));
+        }
+    }
+
+    // ==================== CHECK ROOM USED ====================
+    // FE dùng endpoint này để kiểm tra trước khi mở form Edit hoặc Delete.
+    // Backend vẫn chặn lại trong service.update/service.delete để đảm bảo an toàn.
+    @GetMapping("/{id}/used")
+    public ResponseEntity<?> isRoomUsed(@PathVariable String id) {
+        try {
+            boolean used = service.isRoomUsed(id);
+            return ResponseEntity.ok(Map.of("used", used));
+
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", e.getMessage()));
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("message", e.getMessage()));
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Check room used failed: " + e.getMessage()));
         }
     }
 
