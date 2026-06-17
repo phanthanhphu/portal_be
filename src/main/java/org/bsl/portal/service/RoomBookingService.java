@@ -150,15 +150,18 @@ public class RoomBookingService {
      * - name: tìm trong title theo kiểu contains, không phân biệt hoa/thường.
      * - roomId: lọc theo phòng.
      * - locationId: lọc theo locationId, hỗ trợ dữ liệu cũ basedLocation text.
-     * - fromDate/toDate: lọc booking nằm trọn trong khoảng ngày.
+     * - fromDate/toDate: lọc booking có giao với khoảng ngày tìm kiếm.
      *
-     * Logic ngày theo yêu cầu:
-     * - fromDate => checkInDate  >= fromDate
-     * - toDate   => checkOutDate <= toDate
+     * Logic ngày khuyến nghị cho Room Booking:
+     * - fromDate + toDate => lấy tất cả booking có phát sinh trong khoảng ngày đó.
+     * - Công thức overlap:
+     *   checkInDate  <= toDate
+     *   checkOutDate >= fromDate
      *
-     * Ví dụ search 26/04 đến 25/06:
-     * - checkInDate  >= 2026-04-26
-     * - checkOutDate <= 2026-06-25
+     * Ví dụ search 12/04 đến 16/04:
+     * - A: 12/04 -> 15/04: có hiện.
+     * - B: 12/04 -> 16/04: có hiện.
+     * - C: 13/04 -> 21/04: có hiện, vì vẫn đang sử dụng phòng trong khoảng 12/04 -> 16/04.
      *
      * Các điều kiện được AND với nhau, nên user có thể search kết hợp:
      * name + room + location + fromDate + toDate.
@@ -229,17 +232,26 @@ public class RoomBookingService {
         }
 
         /*
-         * Search ngày theo logic booking nằm trọn trong khoảng:
-         * - checkInDate  >= fromDate
-         * - checkOutDate <= toDate
+         * Search ngày theo logic booking có giao với khoảng tìm kiếm:
+         * - Có cả fromDate và toDate:
+         *   checkInDate  <= toDate
+         *   checkOutDate >= fromDate
+         *
+         * - Chỉ có fromDate:
+         *   lấy booking chưa checkout trước fromDate
+         *   checkOutDate >= fromDate
+         *
+         * - Chỉ có toDate:
+         *   lấy booking đã check-in trước hoặc trong toDate
+         *   checkInDate <= toDate
          */
         if (fromDate != null && toDate != null) {
-            criteriaList.add(Criteria.where("checkInDate").gte(fromDate));
-            criteriaList.add(Criteria.where("checkOutDate").lte(toDate));
+            criteriaList.add(Criteria.where("checkInDate").lte(toDate));
+            criteriaList.add(Criteria.where("checkOutDate").gte(fromDate));
         } else if (fromDate != null) {
-            criteriaList.add(Criteria.where("checkInDate").gte(fromDate));
+            criteriaList.add(Criteria.where("checkOutDate").gte(fromDate));
         } else if (toDate != null) {
-            criteriaList.add(Criteria.where("checkOutDate").lte(toDate));
+            criteriaList.add(Criteria.where("checkInDate").lte(toDate));
         }
 
         Query countQuery = new Query();
