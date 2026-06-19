@@ -16,9 +16,12 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+import org.bson.Document;
+import org.bson.types.ObjectId;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -36,6 +39,7 @@ import java.util.stream.Collectors;
 public class RoomBookingService {
 
     private static final long ROOM_BOOKING_BUFFER_MINUTES = 30L;
+    private static final String INDEX_ROOM_ORDER_FIELD = "indexRoomOrder";
 
     @Autowired
     private RoomBookingRepository repository;
@@ -63,7 +67,7 @@ public class RoomBookingService {
         booking.setPeopleInCharge(trimToNull(booking.getPeopleInCharge()));
         booking.setLocationId(trimToNull(booking.getLocationId()));
         booking.setBasedLocation(trimToNull(booking.getBasedLocation()));
-        booking.setRoomCharged(normalizeVndAmount(booking.getRoomCharged()));
+        booking.setRoomCharged(normalizeUsdAmount(booking.getRoomCharged()));
         booking.setShowOnIndexRoom(Boolean.FALSE);
         booking.setCreatedBy(resolveCreatedBy(booking));
         booking.setCreatedAt(LocalDateTime.now());
@@ -80,6 +84,7 @@ public class RoomBookingService {
 
         RoomBooking existing = repository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Room booking not found"));
+        Integer previousIndexRoomOrder = getIndexRoomOrder(id);
 
         syncLocationToBooking(booking);
         validateBooking(id, booking);
@@ -93,7 +98,7 @@ public class RoomBookingService {
         existing.setPeopleInCharge(trimToNull(booking.getPeopleInCharge()));
         existing.setLocationId(trimToNull(booking.getLocationId()));
         existing.setBasedLocation(trimToNull(booking.getBasedLocation()));
-        existing.setRoomCharged(normalizeVndAmount(booking.getRoomCharged()));
+        existing.setRoomCharged(normalizeUsdAmount(booking.getRoomCharged()));
 
         if (booking.getShowOnIndexRoom() != null) {
             if (Boolean.TRUE.equals(booking.getShowOnIndexRoom())) {
@@ -105,7 +110,10 @@ public class RoomBookingService {
 
         existing.setUpdatedAt(LocalDateTime.now());
 
-        return repository.save(existing);
+        RoomBooking saved = repository.save(existing);
+        syncIndexRoomOrderAfterSave(saved, previousIndexRoomOrder);
+
+        return saved;
     }
 
     // ==================== DELETE ROOM BOOKING ====================
@@ -117,7 +125,13 @@ public class RoomBookingService {
         RoomBooking existing = repository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Room booking not found"));
 
+        boolean wasShownOnIndexRoom = Boolean.TRUE.equals(existing.getShowOnIndexRoom());
+
         repository.delete(existing);
+
+        if (wasShownOnIndexRoom) {
+            resequenceIndexRoomOrder();
+        }
     }
 
     // ==================== GET ALL ROOM BOOKINGS ====================
@@ -152,19 +166,15 @@ public class RoomBookingService {
      * - locationId: lọc theo locationId, hỗ trợ dữ liệu cũ basedLocation text.
      * - fromDate/toDate: lọc booking có giao với khoảng ngày tìm kiếm.
      *
-     * Logic ngày khuyến nghị cho Room Booking:
-     * - fromDate + toDate => lấy tất cả booking có phát sinh trong khoảng ngày đó.
+     * Logic ngày theo yêu cầu:
+     * - fromDate + toDate => chỉ cần booking chạm/đi qua khoảng ngày user chọn thì lấy.
      * - Công thức overlap:
      *   checkInDate  <= toDate
      *   checkOutDate >= fromDate
      *
-     * Ví dụ search 12/04 đến 16/04:
-     * - A: 12/04 -> 15/04: có hiện.
-     * - B: 12/04 -> 16/04: có hiện.
-     * - C: 13/04 -> 21/04: có hiện, vì vẫn đang sử dụng phòng trong khoảng 12/04 -> 16/04.
-     *
-     * Các điều kiện được AND với nhau, nên user có thể search kết hợp:
-     * name + room + location + fromDate + toDate.
+     * Sort theo yêu cầu:
+     * - API /search trả về booking mới cập nhật nhất lên top.
+     * - Dựa trên toàn bộ updatedAt: ngày + giờ + phút + giây + mili giây.
      */
     public Page<RoomBookingDto> search(
             String name,
@@ -180,12 +190,18 @@ public class RoomBookingService {
 
         validateDateRange(fromDate, toDate, "To date must be after or equal to from date");
 
+        /*
+         * API /search trả về booking mới cập nhật nhất trước.
+         * updatedAt DESC là tiêu chí chính; createdAt/checkInDate chỉ dùng làm phụ để kết quả ổn định
+         * khi dữ liệu cũ chưa có updatedAt hoặc nhiều dòng có cùng thời điểm cập nhật.
+         */
         Pageable pageable = PageRequest.of(
                 safePage,
                 safeSize,
-                Sort.by(Sort.Direction.DESC, "checkInDate")
-                        .and(Sort.by(Sort.Direction.DESC, "checkInTime"))
+                Sort.by(Sort.Direction.DESC, "updatedAt")
                         .and(Sort.by(Sort.Direction.DESC, "createdAt"))
+                        .and(Sort.by(Sort.Direction.DESC, "checkInDate"))
+                        .and(Sort.by(Sort.Direction.DESC, "checkInTime"))
         );
 
         List<Criteria> criteriaList = new ArrayList<>();
@@ -232,10 +248,16 @@ public class RoomBookingService {
         }
 
         /*
-         * Search ngày theo logic booking có giao với khoảng tìm kiếm:
+         * Search ngày theo logic booking CÓ GIAO với khoảng tìm kiếm (overlap):
          * - Có cả fromDate và toDate:
          *   checkInDate  <= toDate
          *   checkOutDate >= fromDate
+         *
+         * Nghĩa là booking chỉ cần chạm/đi qua khoảng ngày user chọn thì lấy.
+         * Ví dụ search 06/10/2026 đến 06/12/2026:
+         * - 06/11/2026 -> 06/17/2026: có lấy vì check-in nằm trong khoảng.
+         * - 06/08/2026 -> 06/11/2026: có lấy vì check-out nằm trong khoảng.
+         * - 06/08/2026 -> 06/17/2026: có lấy vì booking bao phủ toàn bộ khoảng.
          *
          * - Chỉ có fromDate:
          *   lấy booking chưa checkout trước fromDate
@@ -305,16 +327,23 @@ public class RoomBookingService {
 
         if (enabled) {
             validateCanShowOnIndexRoom(booking);
+            resequenceIndexRoomOrder();
+            setIndexRoomDisplayState(id, true, getNextIndexRoomOrder());
+        } else {
+            setIndexRoomDisplayState(id, false, null);
+            resequenceIndexRoomOrder();
         }
 
-        booking.setShowOnIndexRoom(enabled);
-        booking.setUpdatedAt(LocalDateTime.now());
-
-        return toDto(repository.save(booking));
+        return repository.findById(id)
+                .map(this::toDto)
+                .orElseThrow(() -> new NoSuchElementException("Room booking not found"));
     }
 
     public List<RoomBookingDto> getIndexRoomBookings() {
-        Sort sort = Sort.by(Sort.Direction.ASC, "checkInDate")
+        resequenceIndexRoomOrder();
+
+        Sort sort = Sort.by(Sort.Direction.ASC, INDEX_ROOM_ORDER_FIELD)
+                .and(Sort.by(Sort.Direction.ASC, "checkInDate"))
                 .and(Sort.by(Sort.Direction.ASC, "checkInTime"))
                 .and(Sort.by(Sort.Direction.ASC, "roomId"))
                 .and(Sort.by(Sort.Direction.DESC, "createdAt"));
@@ -323,6 +352,122 @@ public class RoomBookingService {
                 .stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
+    }
+
+    private Criteria idCriteria(String id) {
+        if (ObjectId.isValid(id)) {
+            return new Criteria().orOperator(
+                    Criteria.where("_id").is(id),
+                    Criteria.where("_id").is(new ObjectId(id))
+            );
+        }
+
+        return Criteria.where("_id").is(id);
+    }
+
+    private void setIndexRoomDisplayState(String id, boolean enabled, Integer displayOrder) {
+        Update update = new Update()
+                .set("showOnIndexRoom", enabled)
+                .set("updatedAt", LocalDateTime.now());
+
+        if (enabled) {
+            update.set(INDEX_ROOM_ORDER_FIELD, displayOrder == null ? getNextIndexRoomOrder() : displayOrder);
+        } else {
+            update.unset(INDEX_ROOM_ORDER_FIELD);
+        }
+
+        mongoTemplate.updateFirst(
+                Query.query(idCriteria(id)),
+                update,
+                RoomBooking.class
+        );
+    }
+
+    private int getNextIndexRoomOrder() {
+        long currentShownCount = mongoTemplate.count(
+                Query.query(Criteria.where("showOnIndexRoom").is(Boolean.TRUE)),
+                RoomBooking.class
+        );
+
+        return (int) currentShownCount + 1;
+    }
+
+    private Integer getIndexRoomOrder(String id) {
+        if (id == null || id.trim().isEmpty()) {
+            return null;
+        }
+
+        Query query = Query.query(idCriteria(id));
+        query.fields().include(INDEX_ROOM_ORDER_FIELD);
+
+        Document doc = mongoTemplate.findOne(
+                query,
+                Document.class,
+                mongoTemplate.getCollectionName(RoomBooking.class)
+        );
+
+        if (doc == null) {
+            return null;
+        }
+
+        Object value = doc.get(INDEX_ROOM_ORDER_FIELD);
+
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+
+        if (value != null) {
+            try {
+                return Integer.parseInt(String.valueOf(value));
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private void syncIndexRoomOrderAfterSave(RoomBooking saved, Integer previousIndexRoomOrder) {
+        if (saved == null || saved.getId() == null) {
+            return;
+        }
+
+        if (Boolean.TRUE.equals(saved.getShowOnIndexRoom())) {
+            setIndexRoomDisplayState(
+                    saved.getId(),
+                    true,
+                    previousIndexRoomOrder == null ? getNextIndexRoomOrder() : previousIndexRoomOrder
+            );
+        } else {
+            setIndexRoomDisplayState(saved.getId(), false, null);
+        }
+
+        resequenceIndexRoomOrder();
+    }
+
+    private void resequenceIndexRoomOrder() {
+        Sort sort = Sort.by(Sort.Direction.ASC, INDEX_ROOM_ORDER_FIELD)
+                .and(Sort.by(Sort.Direction.ASC, "checkInDate"))
+                .and(Sort.by(Sort.Direction.ASC, "checkInTime"))
+                .and(Sort.by(Sort.Direction.ASC, "roomId"))
+                .and(Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        Query query = Query.query(Criteria.where("showOnIndexRoom").is(Boolean.TRUE)).with(sort);
+        List<RoomBooking> shownBookings = mongoTemplate.find(query, RoomBooking.class);
+
+        int order = 1;
+        for (RoomBooking item : shownBookings) {
+            if (item.getId() == null) {
+                continue;
+            }
+
+            mongoTemplate.updateFirst(
+                    Query.query(idCriteria(item.getId())),
+                    new Update().set(INDEX_ROOM_ORDER_FIELD, order),
+                    RoomBooking.class
+            );
+            order += 1;
+        }
     }
 
     // Không cho tick hiển thị nếu booking đã hết hạn theo cả ngày + giờ.
@@ -463,17 +608,11 @@ public class RoomBookingService {
             throw new IllegalArgumentException("Check-in date is required");
         }
 
-        if (booking.getCheckInTime() == null) {
-            throw new IllegalArgumentException("Check-in time is required");
-        }
 
         if (booking.getCheckOutDate() == null) {
             throw new IllegalArgumentException("Check-out date is required");
         }
 
-        if (booking.getCheckOutTime() == null) {
-            throw new IllegalArgumentException("Check-out time is required");
-        }
 
         LocalDateTime checkInAt = toDateTime(booking.getCheckInDate(), booking.getCheckInTime());
         LocalDateTime checkOutAt = toDateTime(booking.getCheckOutDate(), booking.getCheckOutTime());
@@ -498,7 +637,7 @@ public class RoomBookingService {
             throw new IllegalArgumentException("Based location must be less than or equal to 200 characters");
         }
 
-        validateVndAmount(booking.getRoomCharged());
+        validateUsdAmount(booking.getRoomCharged());
 
         validateNoRoomDateConflict(currentBookingId, booking);
     }
@@ -517,29 +656,29 @@ public class RoomBookingService {
         }
     }
 
-    // ==================== VND VALIDATION ====================
-    private void validateVndAmount(BigDecimal amount) {
+    // ==================== USD VALIDATION ====================
+    private void validateUsdAmount(BigDecimal amount) {
         if (amount == null) {
             return;
         }
 
         if (amount.compareTo(BigDecimal.ZERO) < 0) {
-            throw new IllegalArgumentException("Room charged must be greater than or equal to 0 VND");
+            throw new IllegalArgumentException("Room charged must be greater than or equal to 0 USD");
         }
 
         BigDecimal normalized = amount.stripTrailingZeros();
 
-        if (normalized.scale() > 0) {
-            throw new IllegalArgumentException("Room charged must be a whole number in VND, decimals are not allowed");
+        if (normalized.scale() > 2) {
+            throw new IllegalArgumentException("Room charged supports up to 2 decimal places in USD");
         }
     }
 
-    private BigDecimal normalizeVndAmount(BigDecimal amount) {
+    private BigDecimal normalizeUsdAmount(BigDecimal amount) {
         if (amount == null) {
             return null;
         }
 
-        return amount.setScale(0, RoundingMode.UNNECESSARY);
+        return amount.setScale(2, RoundingMode.HALF_UP);
     }
 
     // Không được đặt cùng phòng nếu bị trùng thời gian
@@ -622,7 +761,7 @@ public class RoomBookingService {
 
     private LocalTime normalizeTime(LocalTime time) {
         if (time == null) {
-            return null;
+            return LocalTime.MIN;
         }
 
         return time.withSecond(0).withNano(0);
@@ -643,10 +782,10 @@ public class RoomBookingService {
     }
 
     // Dành cho dữ liệu cũ chưa có checkOutTime.
-    // Nếu dữ liệu cũ bị null giờ, tạm hiểu là hết ngày 23:59:59 để tránh overbook.
+    // Nếu dữ liệu cũ bị null giờ, dùng mặc định 00:00 theo chuẩn hiện tại.
     private LocalDateTime toExistingEndDateTime(RoomBooking booking) {
         LocalTime time = booking.getCheckOutTime() == null
-                ? LocalTime.of(23, 59, 59)
+                ? LocalTime.MIN
                 : normalizeTime(booking.getCheckOutTime());
 
         return LocalDateTime.of(booking.getCheckOutDate(), time);
@@ -654,7 +793,7 @@ public class RoomBookingService {
 
     private String formatTime(LocalTime time) {
         if (time == null) {
-            return "--:--";
+            return "00:00";
         }
 
         return normalizeTime(time).toString();

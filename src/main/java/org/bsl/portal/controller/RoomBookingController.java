@@ -140,8 +140,8 @@ public class RoomBookingController {
 
     // ==================== SEARCH ROOM BOOKINGS WITH PAGINATION ====================
     // Search kết hợp theo: name, roomId, locationId, fromDate, toDate.
-    // Logic ngày: booking nằm trọn trong khoảng
-    // checkInDate >= fromDate AND checkOutDate <= toDate.
+    // Logic ngày: booking có giao với khoảng tìm kiếm (overlap).
+    // checkInDate <= toDate AND checkOutDate >= fromDate.
     @GetMapping("/search")
     public ResponseEntity<?> search(
             @RequestParam(required = false) String name,
