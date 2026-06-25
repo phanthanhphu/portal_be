@@ -2,14 +2,30 @@ package org.bsl.portal.request;
 
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
 public class UserRequest {
-    public static final String APPROVE_NONE = "NONE";
-    public static final String APPROVE_NOTICE = "NOTICE";
-    public static final String APPROVE_DOCUMENT = "DOCUMENT";
+    public static final String PERMISSION_NONE = "NONE";
+    public static final String PERMISSION_NOTICE = "NOTICE";
+    public static final String PERMISSION_DOCUMENT = "DOCUMENT";
+
+    // Giữ lại alias cũ để dữ liệu/API cũ không bị lỗi
+    public static final String APPROVE_NONE = PERMISSION_NONE;
+    public static final String APPROVE_NOTICE = PERMISSION_NOTICE;
+    public static final String APPROVE_DOCUMENT = PERMISSION_DOCUMENT;
     public static final String APPROVE_BOTH = "BOTH";
 
     public static final String BOOKING_NONE = "NONE";
     public static final String BOOKING_MANAGE = "BOOKING";
+
+    public static final String MODULE_NONE = PERMISSION_NONE;
+    public static final String MODULE_NOTICE = PERMISSION_NOTICE;
+    public static final String MODULE_DOCUMENT = PERMISSION_DOCUMENT;
 
     private String username;
     private String email;
@@ -21,13 +37,18 @@ public class UserRequest {
     private String departmentId;
 
     /**
-     * Permission for approval features.
-     * NONE     = cannot approve anything
-     * NOTICE   = can approve notices only
-     * DOCUMENT = can approve documents only
-     * BOTH     = can approve both notices and documents
+     * Checkbox permissions for approval features.
+     * FE có thể gửi:
+     * - approvePermission=NONE
+     * - approvePermission=NOTICE
+     * - approvePermission=DOCUMENT
+     * - approvePermission=NOTICE,DOCUMENT
+     * - approvePermissions=NOTICE&approvePermissions=DOCUMENT
+     *
+     * Alias cũ BOTH vẫn được đọc là NOTICE,DOCUMENT.
      */
-    private String approvePermission = APPROVE_NONE;
+    private String approvePermission = PERMISSION_NONE;
+    private List<String> approvePermissions = new ArrayList<>();
 
     /**
      * Permission for Room Booking feature.
@@ -36,23 +57,80 @@ public class UserRequest {
      */
     private String bookingPermission = BOOKING_NONE;
 
+    /**
+     * Checkbox permissions for menu/module actions.
+     * Chỉ cho phép 3 quyền theo yêu cầu: NONE, NOTICE, DOCUMENT.
+     * FE có thể gửi:
+     * - modulePermission=NONE
+     * - modulePermission=NOTICE,DOCUMENT
+     * - modulePermissions=NOTICE&modulePermissions=DOCUMENT
+     *
+     * Alias cũ ALL được đọc là NOTICE,DOCUMENT. DEPARTMENT cũ sẽ bị bỏ qua.
+     */
+    private String modulePermission = PERMISSION_NONE;
+    private List<String> modulePermissions = new ArrayList<>();
+
     private MultipartFile profileImage;
 
-    private String normalizeApprovePermission(String value) {
+    private String normalizeNoticeDocumentPermission(String value) {
         if (value == null || value.trim().isEmpty()) {
-            return APPROVE_NONE;
+            return PERMISSION_NONE;
         }
 
         String normalized = value.trim().toUpperCase();
+        Set<String> permissions = new LinkedHashSet<>();
 
-        if (APPROVE_NOTICE.equals(normalized)
-                || APPROVE_DOCUMENT.equals(normalized)
-                || APPROVE_BOTH.equals(normalized)
-                || APPROVE_NONE.equals(normalized)) {
-            return normalized;
+        for (String item : normalized.split(",")) {
+            String cleanItem = item.trim();
+
+            if (APPROVE_BOTH.equals(cleanItem) || "ALL".equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+            } else if (PERMISSION_NOTICE.equals(cleanItem) || PERMISSION_DOCUMENT.equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
         }
 
-        return APPROVE_NONE;
+        if (permissions.isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        return String.join(",", permissions);
+    }
+
+    private String normalizeNoticeDocumentPermissions(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        return normalizeNoticeDocumentPermission(
+                values.stream()
+                        .filter(item -> item != null && !item.trim().isEmpty())
+                        .collect(Collectors.joining(","))
+        );
+    }
+
+    private List<String> toPermissionList(String value) {
+        String normalized = normalizeNoticeDocumentPermission(value);
+        List<String> result = new ArrayList<>();
+
+        if (PERMISSION_NONE.equals(normalized)) {
+            result.add(PERMISSION_NONE);
+            return result;
+        }
+
+        result.addAll(Arrays.asList(normalized.split(",")));
+        return result;
+    }
+
+    private boolean hasPermission(String permissionValue, String target) {
+        String normalized = normalizeNoticeDocumentPermission(permissionValue);
+
+        if (PERMISSION_NONE.equals(normalized)) {
+            return false;
+        }
+
+        return Arrays.asList(normalized.split(",")).contains(target);
     }
 
     private String normalizeBookingPermission(String value) {
@@ -70,17 +148,27 @@ public class UserRequest {
     }
 
     public boolean canApproveNotice() {
-        String permission = normalizeApprovePermission(this.approvePermission);
-        return APPROVE_NOTICE.equals(permission) || APPROVE_BOTH.equals(permission);
+        return hasPermission(getApprovePermission(), PERMISSION_NOTICE);
     }
 
     public boolean canApproveDocument() {
-        String permission = normalizeApprovePermission(this.approvePermission);
-        return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
+        return hasPermission(getApprovePermission(), PERMISSION_DOCUMENT);
     }
 
     public boolean canManageBooking() {
         return BOOKING_MANAGE.equals(normalizeBookingPermission(this.bookingPermission));
+    }
+
+    public boolean canManageNotice() {
+        return hasPermission(getModulePermission(), PERMISSION_NOTICE);
+    }
+
+    public boolean canManageDocument() {
+        return hasPermission(getModulePermission(), PERMISSION_DOCUMENT);
+    }
+
+    public boolean canManageDepartment() {
+        return false;
     }
 
     // Getters and Setters
@@ -149,11 +237,25 @@ public class UserRequest {
     }
 
     public String getApprovePermission() {
-        return normalizeApprovePermission(approvePermission);
+        if (approvePermissions != null && !approvePermissions.isEmpty()) {
+            return normalizeNoticeDocumentPermissions(approvePermissions);
+        }
+
+        return normalizeNoticeDocumentPermission(approvePermission);
     }
 
     public void setApprovePermission(String approvePermission) {
-        this.approvePermission = normalizeApprovePermission(approvePermission);
+        this.approvePermission = normalizeNoticeDocumentPermission(approvePermission);
+        this.approvePermissions = toPermissionList(this.approvePermission);
+    }
+
+    public List<String> getApprovePermissions() {
+        return toPermissionList(getApprovePermission());
+    }
+
+    public void setApprovePermissions(List<String> approvePermissions) {
+        this.approvePermissions = approvePermissions != null ? new ArrayList<>(approvePermissions) : new ArrayList<>();
+        this.approvePermission = normalizeNoticeDocumentPermissions(this.approvePermissions);
     }
 
     public String getBookingPermission() {
@@ -162,6 +264,28 @@ public class UserRequest {
 
     public void setBookingPermission(String bookingPermission) {
         this.bookingPermission = normalizeBookingPermission(bookingPermission);
+    }
+
+    public String getModulePermission() {
+        if (modulePermissions != null && !modulePermissions.isEmpty()) {
+            return normalizeNoticeDocumentPermissions(modulePermissions);
+        }
+
+        return normalizeNoticeDocumentPermission(modulePermission);
+    }
+
+    public void setModulePermission(String modulePermission) {
+        this.modulePermission = normalizeNoticeDocumentPermission(modulePermission);
+        this.modulePermissions = toPermissionList(this.modulePermission);
+    }
+
+    public List<String> getModulePermissions() {
+        return toPermissionList(getModulePermission());
+    }
+
+    public void setModulePermissions(List<String> modulePermissions) {
+        this.modulePermissions = modulePermissions != null ? new ArrayList<>(modulePermissions) : new ArrayList<>();
+        this.modulePermission = normalizeNoticeDocumentPermissions(this.modulePermissions);
     }
 
     public MultipartFile getProfileImage() {

@@ -1,8 +1,18 @@
 package org.bsl.portal.dto;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 public class UserDTO {
+    private static final String PERMISSION_NONE = "NONE";
+    private static final String PERMISSION_NOTICE = "NOTICE";
+    private static final String PERMISSION_DOCUMENT = "DOCUMENT";
+
     private String id;
     private String username;
     private String email;
@@ -17,12 +27,19 @@ public class UserDTO {
     private String departmentName;
     private String division;
 
-    private String approvePermission = "NONE";
+    private String approvePermission = PERMISSION_NONE;
+    private List<String> approvePermissions = new ArrayList<>();
     private boolean canApproveNotice;
     private boolean canApproveDocument;
 
     private String bookingPermission = "NONE";
     private boolean canManageBooking;
+
+    private String modulePermission = PERMISSION_NONE;
+    private List<String> modulePermissions = new ArrayList<>();
+    private boolean canManageNotice;
+    private boolean canManageDocument;
+    private boolean canManageDepartment;
 
     public String getId() {
         return id;
@@ -125,11 +142,21 @@ public class UserDTO {
     }
 
     public String getApprovePermission() {
-        return normalizeApprovePermission(approvePermission);
+        return normalizeNoticeDocumentPermission(approvePermission);
     }
 
     public void setApprovePermission(String approvePermission) {
-        this.approvePermission = normalizeApprovePermission(approvePermission);
+        this.approvePermission = normalizeNoticeDocumentPermission(approvePermission);
+        this.approvePermissions = toPermissionList(this.approvePermission);
+    }
+
+    public List<String> getApprovePermissions() {
+        return toPermissionList(this.approvePermission);
+    }
+
+    public void setApprovePermissions(List<String> approvePermissions) {
+        this.approvePermissions = approvePermissions != null ? new ArrayList<>(approvePermissions) : new ArrayList<>();
+        this.approvePermission = normalizeNoticeDocumentPermissions(this.approvePermissions);
     }
 
     public boolean isCanApproveNotice() {
@@ -176,25 +203,113 @@ public class UserDTO {
         this.canManageBooking = canManageBooking;
     }
 
+    public String getModulePermission() {
+        return normalizeNoticeDocumentPermission(modulePermission);
+    }
+
+    public void setModulePermission(String modulePermission) {
+        this.modulePermission = normalizeNoticeDocumentPermission(modulePermission);
+        this.modulePermissions = toPermissionList(this.modulePermission);
+    }
+
+    public List<String> getModulePermissions() {
+        return toPermissionList(this.modulePermission);
+    }
+
+    public void setModulePermissions(List<String> modulePermissions) {
+        this.modulePermissions = modulePermissions != null ? new ArrayList<>(modulePermissions) : new ArrayList<>();
+        this.modulePermission = normalizeNoticeDocumentPermissions(this.modulePermissions);
+    }
+
+    public boolean isCanManageNotice() {
+        return canManageNotice;
+    }
+
+    public boolean getCanManageNotice() {
+        return canManageNotice;
+    }
+
+    public void setCanManageNotice(boolean canManageNotice) {
+        this.canManageNotice = canManageNotice;
+    }
+
+    public boolean isCanManageDocument() {
+        return canManageDocument;
+    }
+
+    public boolean getCanManageDocument() {
+        return canManageDocument;
+    }
+
+    public void setCanManageDocument(boolean canManageDocument) {
+        this.canManageDocument = canManageDocument;
+    }
+
+    public boolean isCanManageDepartment() {
+        return canManageDepartment;
+    }
+
+    public boolean getCanManageDepartment() {
+        return canManageDepartment;
+    }
+
+    public void setCanManageDepartment(boolean canManageDepartment) {
+        this.canManageDepartment = canManageDepartment;
+    }
+
     private String clean(String value) {
         return value == null ? "" : value.trim();
     }
 
-    private String normalizeApprovePermission(String value) {
+    private String normalizeNoticeDocumentPermission(String value) {
         if (value == null || value.trim().isEmpty()) {
-            return "NONE";
+            return PERMISSION_NONE;
         }
 
         String permission = value.trim().toUpperCase();
+        Set<String> permissions = new LinkedHashSet<>();
 
-        if ("NONE".equals(permission)
-                || "NOTICE".equals(permission)
-                || "DOCUMENT".equals(permission)
-                || "BOTH".equals(permission)) {
-            return permission;
+        for (String item : permission.split(",")) {
+            String cleanItem = item.trim();
+
+            if ("BOTH".equals(cleanItem) || "ALL".equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+            } else if (PERMISSION_NOTICE.equals(cleanItem) || PERMISSION_DOCUMENT.equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
         }
 
-        return "NONE";
+        if (permissions.isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        return String.join(",", permissions);
+    }
+
+    private String normalizeNoticeDocumentPermissions(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        return normalizeNoticeDocumentPermission(
+                values.stream()
+                        .filter(item -> item != null && !item.trim().isEmpty())
+                        .collect(Collectors.joining(","))
+        );
+    }
+
+    private List<String> toPermissionList(String value) {
+        String normalized = normalizeNoticeDocumentPermission(value);
+        List<String> result = new ArrayList<>();
+
+        if (PERMISSION_NONE.equals(normalized)) {
+            result.add(PERMISSION_NONE);
+            return result;
+        }
+
+        result.addAll(Arrays.asList(normalized.split(",")));
+        return result;
     }
 
     private String normalizeBookingPermission(String value) {

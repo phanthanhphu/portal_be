@@ -75,10 +75,15 @@ public class UserController {
     private static final String UPLOAD_DIR = "uploads/users/";
     private static final long MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
-    public static final String APPROVE_NONE = "NONE";
-    public static final String APPROVE_NOTICE = "NOTICE";
-    public static final String APPROVE_DOCUMENT = "DOCUMENT";
-    public static final String APPROVE_BOTH = "BOTH";
+    public static final String PERMISSION_NONE = "NONE";
+    public static final String PERMISSION_NOTICE = "NOTICE";
+    public static final String PERMISSION_DOCUMENT = "DOCUMENT";
+    public static final String PERMISSION_BOTH_ALIAS = "BOTH";
+
+    public static final String APPROVE_NONE = PERMISSION_NONE;
+    public static final String APPROVE_NOTICE = PERMISSION_NOTICE;
+    public static final String APPROVE_DOCUMENT = PERMISSION_DOCUMENT;
+    public static final String APPROVE_BOTH = PERMISSION_BOTH_ALIAS;
 
     public static final String BOOKING_NONE = "NONE";
     public static final String BOOKING_MANAGE = "BOOKING";
@@ -140,6 +145,7 @@ public class UserController {
             user.setDepartmentId(request.getDepartmentId());
             user.setApprovePermission(normalizeApprovePermission(request.getApprovePermission()));
             user.setBookingPermission(normalizeBookingPermission(request.getBookingPermission()));
+            user.setModulePermission(normalizeModulePermission(request.getModulePermission()));
 
             Boolean isEnabled = request.getIsEnabled();
             user.setEnabled(isEnabled != null ? isEnabled : true);
@@ -465,6 +471,11 @@ public class UserController {
                             ? normalizeBookingPermission(request.getBookingPermission())
                             : normalizeBookingPermission(existingUser.getBookingPermission())
             );
+            user.setModulePermission(
+                    request.getModulePermission() != null
+                            ? normalizeModulePermission(request.getModulePermission())
+                            : normalizeModulePermission(existingUser.getModulePermission())
+            );
 
             Boolean isEnabled = request.getIsEnabled();
             user.setEnabled(isEnabled != null ? isEnabled : existingUser.isEnabled());
@@ -769,20 +780,7 @@ public class UserController {
     }
 
     private String normalizeApprovePermission(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            return APPROVE_NONE;
-        }
-
-        String permission = value.trim().toUpperCase();
-
-        if (APPROVE_NOTICE.equals(permission)
-                || APPROVE_DOCUMENT.equals(permission)
-                || APPROVE_BOTH.equals(permission)
-                || APPROVE_NONE.equals(permission)) {
-            return permission;
-        }
-
-        return APPROVE_NONE;
+        return normalizeNoticeDocumentPermission(value);
     }
 
     private String normalizeApprovePermissionFilter(String value) {
@@ -796,14 +794,67 @@ public class UserController {
             return "";
         }
 
-        if (APPROVE_NOTICE.equals(permission)
-                || APPROVE_DOCUMENT.equals(permission)
-                || APPROVE_BOTH.equals(permission)
-                || APPROVE_NONE.equals(permission)) {
-            return permission;
+        if (PERMISSION_NONE.equals(permission)
+                || permission.contains(PERMISSION_NOTICE)
+                || permission.contains(PERMISSION_DOCUMENT)
+                || permission.contains(PERMISSION_BOTH_ALIAS)) {
+            return normalizeNoticeDocumentPermission(permission);
         }
 
         return "";
+    }
+
+    private String normalizeModulePermission(String value) {
+        return normalizeNoticeDocumentPermission(value);
+    }
+
+    private String normalizeNoticeDocumentPermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        String normalized = value.trim().toUpperCase();
+        Set<String> permissions = new LinkedHashSet<>();
+
+        for (String item : normalized.split(",")) {
+            String cleanItem = item.trim();
+
+            if (PERMISSION_BOTH_ALIAS.equals(cleanItem) || "ALL".equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+            } else if (PERMISSION_NOTICE.equals(cleanItem) || PERMISSION_DOCUMENT.equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
+        }
+
+        if (permissions.isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        return String.join(",", permissions);
+    }
+
+    private List<String> toPermissionList(String value) {
+        String normalized = normalizeNoticeDocumentPermission(value);
+        List<String> result = new ArrayList<>();
+
+        if (PERMISSION_NONE.equals(normalized)) {
+            result.add(PERMISSION_NONE);
+            return result;
+        }
+
+        result.addAll(Arrays.asList(normalized.split(",")));
+        return result;
+    }
+
+    private boolean hasNoticeDocumentPermission(String permissionValue, String target) {
+        String permission = normalizeNoticeDocumentPermission(permissionValue);
+
+        if (PERMISSION_NONE.equals(permission)) {
+            return false;
+        }
+
+        return Arrays.asList(permission.split(",")).contains(target);
     }
 
     private String normalizeBookingPermission(String value) {
@@ -851,23 +902,15 @@ public class UserController {
     }
 
     private boolean canApproveNotice(User user) {
-        if (isAdmin(user)) {
-            return true;
-        }
-
-        String permission = normalizeApprovePermission(user != null ? user.getApprovePermission() : null);
-
-        return APPROVE_NOTICE.equals(permission) || APPROVE_BOTH.equals(permission);
+        // Approval is controlled by approvePermission only.
+        // Role Admin alone does not grant approve permission.
+        return hasNoticeDocumentPermission(user != null ? user.getApprovePermission() : null, PERMISSION_NOTICE);
     }
 
     private boolean canApproveDocument(User user) {
-        if (isAdmin(user)) {
-            return true;
-        }
-
-        String permission = normalizeApprovePermission(user != null ? user.getApprovePermission() : null);
-
-        return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
+        // Approval is controlled by approvePermission only.
+        // Role Admin alone does not grant approve permission.
+        return hasNoticeDocumentPermission(user != null ? user.getApprovePermission() : null, PERMISSION_DOCUMENT);
     }
 
     private boolean canManageBooking(User user) {
@@ -878,6 +921,26 @@ public class UserController {
         String permission = normalizeBookingPermission(user != null ? user.getBookingPermission() : null);
 
         return BOOKING_MANAGE.equals(permission);
+    }
+
+    private boolean canManageNotice(User user) {
+        if (isAdmin(user)) {
+            return true;
+        }
+
+        return hasNoticeDocumentPermission(user != null ? user.getModulePermission() : null, PERMISSION_NOTICE);
+    }
+
+    private boolean canManageDocument(User user) {
+        if (isAdmin(user)) {
+            return true;
+        }
+
+        return hasNoticeDocumentPermission(user != null ? user.getModulePermission() : null, PERMISSION_DOCUMENT);
+    }
+
+    private boolean canManageDepartment(User user) {
+        return isAdmin(user);
     }
 
     private Map<String, Object> buildUserResponse(User user) {
@@ -901,12 +964,21 @@ public class UserController {
         data.put("phone", user.getPhone());
         data.put("role", user.getRole());
 
-        data.put("approvePermission", normalizeApprovePermission(user.getApprovePermission()));
+        String approvePermission = normalizeApprovePermission(user.getApprovePermission());
+        data.put("approvePermission", approvePermission);
+        data.put("approvePermissions", toPermissionList(approvePermission));
         data.put("canApproveNotice", canApproveNotice(user));
         data.put("canApproveDocument", canApproveDocument(user));
 
         data.put("bookingPermission", normalizeBookingPermission(user.getBookingPermission()));
         data.put("canManageBooking", canManageBooking(user));
+
+        String modulePermission = normalizeModulePermission(user.getModulePermission());
+        data.put("modulePermission", modulePermission);
+        data.put("modulePermissions", toPermissionList(modulePermission));
+        data.put("canManageNotice", canManageNotice(user));
+        data.put("canManageDocument", canManageDocument(user));
+        data.put("canManageDepartment", canManageDepartment(user));
 
         data.put("profileImageUrl", user.getProfileImageUrl());
         data.put("createdAt", user.getCreatedAt());

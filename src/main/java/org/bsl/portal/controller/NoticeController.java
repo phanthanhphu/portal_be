@@ -31,6 +31,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.LinkedHashSet;
+import java.util.Arrays;
 
 @RestController
 @RequestMapping("/api/notices")
@@ -342,11 +345,28 @@ public class NoticeController {
 
             updateData.setStatus(nextStatus);
 
-            Notice updated = noticeService.update(id, updateData);
+            NoticeService.PinNoticeResult updateResult = noticeService.updateWithAutoUnpinIfApprovedPinned(id, updateData);
+
+            if (updateResult == null || updateResult.getNotice() == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Notice not found"));
+            }
+
+            Notice updated = updateResult.getNotice();
+            List<String> autoUnpinnedNoticeIds = updateResult.getAutoUnpinnedNoticeIds();
 
             appSocketPublisher.noticeChanged("UPDATED", updated.getId());
 
-            return ResponseEntity.ok(updated);
+            for (String autoUnpinnedNoticeId : autoUnpinnedNoticeIds) {
+                appSocketPublisher.noticeChanged("UPDATED", autoUnpinnedNoticeId);
+            }
+
+            appSocketPublisher.noticeChanged("PINNED_CHANGED", updated.getId());
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("X-Auto-Unpinned-Notice-Ids", String.join(",", autoUnpinnedNoticeIds));
+
+            return new ResponseEntity<>(updated, headers, HttpStatus.OK);
 
         } catch (Exception e) {
 
@@ -454,11 +474,39 @@ public class NoticeController {
                     .body(Map.of("message", "You do not have permission to pin this notice"));
         }
 
-        Notice updated = noticeService.pin(id, Boolean.TRUE.equals(pinned));
+        NoticeService.PinNoticeResult pinResult = noticeService.pinWithAutoUnpin(
+                id,
+                Boolean.TRUE.equals(pinned)
+        );
+
+        if (pinResult == null || pinResult.getNotice() == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "Notice not found"));
+        }
+
+        Notice updated = pinResult.getNotice();
+        List<String> autoUnpinnedNoticeIds = pinResult.getAutoUnpinnedNoticeIds();
+
+        /*
+         * Rất quan trọng cho UI realtime:
+         * Khi ghim notice mới và backend tự bỏ ghim notice cũ, phải báo socket cho cả
+         * notice mới và các notice bị auto-unpin. Nếu chỉ báo notice mới thì FE có thể
+         * vẫn hiển thị checkbox pinned của notice cũ là đang chọn.
+         */
+        for (String autoUnpinnedNoticeId : autoUnpinnedNoticeIds) {
+            appSocketPublisher.noticeChanged("UPDATED", autoUnpinnedNoticeId);
+        }
 
         appSocketPublisher.noticeChanged("UPDATED", updated.getId());
+        appSocketPublisher.noticeChanged("PINNED_CHANGED", updated.getId());
 
-        return ResponseEntity.ok(updated);
+        HttpHeaders headers = new HttpHeaders();
+        headers.add("X-Auto-Unpinned-Notice-Ids", String.join(",", autoUnpinnedNoticeIds));
+
+        // Giữ response body là Notice như cũ để không làm vỡ FE hiện tại.
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(updated);
     }
 
     // APPROVE NOTICE
@@ -500,11 +548,28 @@ public class NoticeController {
 
             existing.setUpdatedAt(now);
 
-            Notice updated = noticeService.save(existing);
+            NoticeService.PinNoticeResult approveResult = noticeService.saveWithAutoUnpinIfApprovedPinned(existing);
+
+            if (approveResult == null || approveResult.getNotice() == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Notice not found"));
+            }
+
+            Notice updated = approveResult.getNotice();
+            List<String> autoUnpinnedNoticeIds = approveResult.getAutoUnpinnedNoticeIds();
 
             appSocketPublisher.noticeChanged("APPROVED", updated.getId());
 
-            return ResponseEntity.ok(updated);
+            for (String autoUnpinnedNoticeId : autoUnpinnedNoticeIds) {
+                appSocketPublisher.noticeChanged("UPDATED", autoUnpinnedNoticeId);
+            }
+
+            appSocketPublisher.noticeChanged("PINNED_CHANGED", updated.getId());
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("X-Auto-Unpinned-Notice-Ids", String.join(",", autoUnpinnedNoticeIds));
+
+            return new ResponseEntity<>(updated, headers, HttpStatus.OK);
 
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -649,11 +714,28 @@ public class NoticeController {
 
             existing.setUpdatedAt(now);
 
-            Notice updated = noticeService.save(existing);
+            NoticeService.PinNoticeResult statusResult = noticeService.saveWithAutoUnpinIfApprovedPinned(existing);
+
+            if (statusResult == null || statusResult.getNotice() == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Notice not found"));
+            }
+
+            Notice updated = statusResult.getNotice();
+            List<String> autoUnpinnedNoticeIds = statusResult.getAutoUnpinnedNoticeIds();
 
             appSocketPublisher.noticeChanged(nextStatus, updated.getId());
 
-            return ResponseEntity.ok(updated);
+            for (String autoUnpinnedNoticeId : autoUnpinnedNoticeIds) {
+                appSocketPublisher.noticeChanged("UPDATED", autoUnpinnedNoticeId);
+            }
+
+            appSocketPublisher.noticeChanged("PINNED_CHANGED", updated.getId());
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("X-Auto-Unpinned-Notice-Ids", String.join(",", autoUnpinnedNoticeIds));
+
+            return new ResponseEntity<>(updated, headers, HttpStatus.OK);
 
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -711,56 +793,47 @@ public class NoticeController {
                 }
             }
 
-            /*
-             * Sort by updatedAt first because the screen needs the newest pinned notice
-             * based on the last update time:
-             * - Pinned notice: newest updated pinned notice
-             * - Priority pinned: second newest updated pinned notice
-             */
-            Sort newestSort = Sort.by(Sort.Direction.DESC, "updatedAt")
-                    .and(Sort.by(Sort.Direction.DESC, "createdAt"));
+            Sort newestSort = Sort.by(Sort.Direction.DESC, "createdAt")
+                    .and(Sort.by(Sort.Direction.DESC, "updatedAt"));
+
+            int safePage = Math.max(page, 0);
+            int safeSize = Math.max(size, 1);
+
+            Map<String, String> userNameCache = new HashMap<>();
+            Map<String, Department> departmentCache = new HashMap<>();
 
             ArrayList<Map<String, Object>> pinnedNotices = new ArrayList<>();
             Map<String, Object> featuredPinnedNotice = null;
             String featuredPinnedNoticeId = null;
             Map<String, Object> priorityPinnedNotice = null;
             String priorityPinnedNoticeId = null;
+            List<String> excludedNoticeIds = new ArrayList<>();
 
             if (includeFeaturedPinned) {
-                /*
-                 * Get newest approved pinned notices and return the first 2:
-                 * - featuredPinnedNotice: shown on the hero/banner pinned card
-                 * - priorityPinnedNotice: shown in the Notice panel priority pinned card
-                 *
-                 * Keep pinnedNotices as an array for FE that wants both items together.
-                 */
-                Pageable pinnedLookupPageable = PageRequest.of(0, 1000, newestSort);
+                // Chỉ lấy đúng 2 pinned notice ngay từ MongoDB, không lấy 1000 rồi lọc trong Java.
+                Pageable pinnedLookupPageable = PageRequest.of(0, 2, newestSort);
 
-                Page<NoticeResponse> pinnedLookupResult = noticeService.search(
+                Page<Notice> pinnedLookupResult = noticeService.searchPinnedNoticeEntities(
                         filterDepartmentId,
                         division,
                         departmentName,
                         title,
                         content,
+                        normalizedStatusFilter,
                         pinnedLookupPageable
                 );
 
-                for (NoticeResponse notice : pinnedLookupResult.getContent()) {
-                    Map<String, Object> noticeMap = toNoticeResponseMap(notice, admin, currentDepartmentId);
-
-                    if (!matchesApprovalStatus(noticeMap, normalizedStatusFilter)) {
-                        continue;
-                    }
-
-                    if (!Boolean.TRUE.equals(noticeMap.get("pinned"))) {
-                        continue;
-                    }
+                for (Notice notice : pinnedLookupResult.getContent()) {
+                    Map<String, Object> noticeMap = toNoticeResponseMap(
+                            notice,
+                            admin,
+                            currentDepartmentId,
+                            userNameCache,
+                            departmentCache
+                    );
 
                     pinnedNotices.add(noticeMap);
-
-                    if (pinnedNotices.size() == 2) {
-                        break;
-                    }
+                    excludedNoticeIds.add(notice.getId());
                 }
 
                 if (!pinnedNotices.isEmpty()) {
@@ -774,63 +847,36 @@ public class NoticeController {
                 }
             }
 
-            int safePage = Math.max(page, 0);
-            int safeSize = Math.max(size, 1);
+            Pageable lookupPageable = PageRequest.of(safePage, safeSize, newestSort);
 
-            /*
-             * Load a little more than the requested page because pinned notices are removed
-             * from the normal content list to avoid duplicate display.
-             */
-            int lookupSize = ((safePage + 1) * safeSize) + pinnedNotices.size() + 10;
-
-            Pageable lookupPageable = PageRequest.of(0, lookupSize, newestSort);
-
-            Page<NoticeResponse> result = noticeService.search(
+            // Lọc status + phân trang + bỏ pinned duplicate ngay trong MongoDB.
+            Page<Notice> result = noticeService.searchNoticeEntitiesExcludingIds(
                     filterDepartmentId,
                     division,
                     departmentName,
                     title,
                     content,
+                    normalizedStatusFilter,
+                    excludedNoticeIds,
                     lookupPageable
             );
 
-            ArrayList<Map<String, Object>> filteredContent = new ArrayList<>();
+            ArrayList<Map<String, Object>> responseContent = new ArrayList<>();
 
-            for (NoticeResponse notice : result.getContent()) {
-                Map<String, Object> noticeMap = toNoticeResponseMap(notice, admin, currentDepartmentId);
-                String noticeId = getStringValue(noticeMap.get("id"));
-
-                if (!matchesApprovalStatus(noticeMap, normalizedStatusFilter)) {
-                    continue;
-                }
-
-                if (Objects.equals(featuredPinnedNoticeId, noticeId)
-                        || Objects.equals(priorityPinnedNoticeId, noticeId)) {
-                    continue;
-                }
-
-                filteredContent.add(noticeMap);
+            for (Notice notice : result.getContent()) {
+                responseContent.add(toNoticeResponseMap(
+                        notice,
+                        admin,
+                        currentDepartmentId,
+                        userNameCache,
+                        departmentCache
+                ));
             }
 
-            int fromIndex = Math.min(safePage * safeSize, filteredContent.size());
-            int toIndex = Math.min(fromIndex + safeSize, filteredContent.size());
-
-            ArrayList<Map<String, Object>> responseContent = new ArrayList<>(filteredContent.subList(fromIndex, toIndex));
-
-            long totalElements = filteredContent.size();
-            int totalPages = Math.max(1, (int) Math.ceil((double) totalElements / safeSize));
+            long totalElements = result.getTotalElements();
+            int totalPages = Math.max(1, result.getTotalPages());
 
             Map<String, Object> response = new HashMap<>();
-            /*
-             * Backward-compatible pinned response:
-             * - featuredPinnedNotice: single object for the hero/banner pinned notice
-             * - priorityPinnedNotice: single object for the Notice panel priority pinned card
-             * - pinnedNotices: array containing both pinned notices, in display order
-             *
-             * Do not put the array into featuredPinnedNotice, because older FE code expects
-             * featuredPinnedNotice to be an object. Putting the array there can make the
-             * Priority pinned card disappear or make the hero card read the wrong shape.
-             */
             response.put("featuredPinnedNotice", featuredPinnedNotice);
             response.put("priorityPinnedNotice", priorityPinnedNotice);
             response.put("pinnedNotices", pinnedNotices);
@@ -843,13 +889,15 @@ public class NoticeController {
             response.put("skipDepartmentFilter", skipDepartmentFilter);
             response.put("includeFeaturedPinned", includeFeaturedPinned);
             response.put("status", normalizedStatusFilter);
-            response.put("approvePermission", user != null ? normalizeApprovePermission(user.getApprovePermission()) : "NONE");
+            String approvePermission = user != null ? normalizeApprovePermission(user.getApprovePermission()) : "NONE";
+            response.put("approvePermission", approvePermission);
+            response.put("approvePermissions", toApprovePermissionList(approvePermission));
             response.put("canApproveNotice", canApproveNotice);
             response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
             response.put("totalElements", totalElements);
             response.put("totalPages", totalPages);
-            response.put("number", page);
-            response.put("size", size);
+            response.put("number", safePage);
+            response.put("size", safeSize);
 
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -858,86 +906,162 @@ public class NoticeController {
         }
     }
 
+    @GetMapping("/status-counts")
+    public ResponseEntity<?> getStatusCounts(
+            @RequestParam(required = false) String userId,
+            @RequestParam(defaultValue = "true") boolean skipDepartmentFilter,
+            @RequestParam(required = false) String division,
+            @RequestParam(required = false) String departmentName,
+            @RequestParam(required = false) String title,
+            @RequestParam(required = false) String content) {
+
+        try {
+            boolean admin = false;
+            boolean canApproveNotice = false;
+            String currentDepartmentId = null;
+            String currentUserName = null;
+            String filterDepartmentId = null;
+
+            User user = getAuthenticatedUserOrNull();
+
+            if (user == null) {
+                return unauthorizedNoticeRequest();
+            }
+
+            userId = getAuthenticatedUserId(user);
+            admin = isAdmin(user);
+            canApproveNotice = canApproveNoticeByPermission(user);
+            currentDepartmentId = user.getDepartmentId();
+            currentUserName = getUserDisplayName(user);
+
+            if (!canApproveNotice) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "You do not have permission to view notice approval counts"));
+            }
+
+            if (!admin && !skipDepartmentFilter) {
+                filterDepartmentId = currentDepartmentId;
+
+                if (filterDepartmentId == null || filterDepartmentId.trim().isEmpty()) {
+                    return ResponseEntity.badRequest()
+                            .body(Map.of("message", "User does not belong to any department"));
+                }
+            }
+
+            long pendingCount = noticeService.countNoticeEntities(
+                    filterDepartmentId,
+                    division,
+                    departmentName,
+                    title,
+                    content,
+                    STATUS_PENDING
+            );
+
+            long approvedCount = noticeService.countNoticeEntities(
+                    filterDepartmentId,
+                    division,
+                    departmentName,
+                    title,
+                    content,
+                    STATUS_APPROVED
+            );
+
+            long rejectedCount = noticeService.countNoticeEntities(
+                    filterDepartmentId,
+                    division,
+                    departmentName,
+                    title,
+                    content,
+                    STATUS_REJECTED
+            );
+
+            Map<String, Object> counts = new HashMap<>();
+            counts.put(STATUS_PENDING, pendingCount);
+            counts.put(STATUS_APPROVED, approvedCount);
+            counts.put(STATUS_REJECTED, rejectedCount);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("counts", counts);
+            response.put("pending", pendingCount);
+            response.put("approved", approvedCount);
+            response.put("rejected", rejectedCount);
+            response.put("isAdmin", admin);
+            response.put("currentDepartmentId", currentDepartmentId);
+            response.put("currentUserName", currentUserName);
+            response.put("requestUserName", currentUserName);
+            response.put("skipDepartmentFilter", skipDepartmentFilter);
+            String approvePermission = normalizeApprovePermission(user.getApprovePermission());
+            response.put("approvePermission", approvePermission);
+            response.put("approvePermissions", toApprovePermissionList(approvePermission));
+            response.put("canApproveNotice", canApproveNotice);
+            response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Load notice status counts failed: " + e.getMessage()));
+        }
+    }
+
+
     private Map<String, Object> toNoticeResponseMap(
-            NoticeResponse notice,
+            Notice notice,
             boolean admin,
-            String currentDepartmentId
+            String currentDepartmentId,
+            Map<String, String> userNameCache,
+            Map<String, Department> departmentCache
     ) {
         Map<String, Object> map = new HashMap<>();
 
-        try {
-            PropertyDescriptor[] descriptors = Introspector
-                    .getBeanInfo(notice.getClass(), Object.class)
-                    .getPropertyDescriptors();
+        if (notice == null) {
+            return map;
+        }
 
-            for (PropertyDescriptor descriptor : descriptors) {
-                Method readMethod = descriptor.getReadMethod();
+        map.put("id", notice.getId());
+        map.put("title", notice.getTitle());
+        map.put("content", notice.getContent());
+        map.put("pinned", Boolean.TRUE.equals(notice.getPinned()));
+        map.put("userId", notice.getUserId());
+        map.put("departmentId", notice.getDepartmentId());
+        map.put("createdAt", notice.getCreatedAt());
+        map.put("updatedAt", notice.getUpdatedAt());
+        map.put("status", normalizeApprovalStatus(notice.getStatus()));
+        map.put("approvedBy", notice.getApprovedBy());
+        map.put("approvedAt", notice.getApprovedAt());
+        map.put("rejectedBy", notice.getRejectedBy());
+        map.put("rejectedAt", notice.getRejectedAt());
+        map.put("rejectReason", notice.getRejectReason());
 
-                if (readMethod != null) {
-                    map.put(descriptor.getName(), readMethod.invoke(notice));
-                }
+        String noticeDepartmentId = getStringValue(notice.getDepartmentId());
+
+        if (noticeDepartmentId != null) {
+            Department dept = departmentCache.computeIfAbsent(
+                    noticeDepartmentId,
+                    departmentService::getById
+            );
+
+            if (dept != null) {
+                map.put("departmentName", dept.getDepartmentName());
+                map.put("division", dept.getDivision());
             }
-        } catch (Exception ignored) {
         }
 
-        String noticeId = getStringValue(map.get("id"));
-        Notice fullNotice = null;
+        String creatorUserId = getStringValue(notice.getUserId());
+        String creatorUserName = null;
 
-        if (noticeId != null && !noticeId.trim().isEmpty()) {
-            fullNotice = noticeService.getById(noticeId.trim());
+        if (creatorUserId != null) {
+            creatorUserName = userNameCache.computeIfAbsent(
+                    creatorUserId,
+                    this::getUserDisplayNameById
+            );
         }
-
-        if (fullNotice != null) {
-            map.put("status", normalizeApprovalStatus(fullNotice.getStatus()));
-            map.put("approvedBy", fullNotice.getApprovedBy());
-            map.put("approvedAt", fullNotice.getApprovedAt());
-            map.put("rejectedBy", fullNotice.getRejectedBy());
-            map.put("rejectedAt", fullNotice.getRejectedAt());
-            map.put("rejectReason", fullNotice.getRejectReason());
-        } else {
-            map.put("status", normalizeApprovalStatus(map.get("status")));
-        }
-
-        String creatorUserId = fullNotice != null
-                ? getStringValue(fullNotice.getUserId())
-                : getStringValue(map.get("userId"));
-        String creatorUserName = getUserDisplayNameById(creatorUserId);
 
         map.put("createdByUserId", creatorUserId);
         map.put("createdByName", creatorUserName != null ? creatorUserName : creatorUserId);
         map.put("userName", creatorUserName != null ? creatorUserName : creatorUserId);
 
-        List<String> fileUrls = new ArrayList<>();
-
-        if (fullNotice != null) {
-            fileUrls = getExistingFileUrls(fullNotice);
-        }
-
-        if (fileUrls.isEmpty()) {
-            Object dtoFileUrls = map.get("fileUrls");
-            if (dtoFileUrls instanceof List<?>) {
-                List<String> urls = new ArrayList<>();
-                for (Object url : (List<?>) dtoFileUrls) {
-                    if (url != null) {
-                        urls.add(String.valueOf(url));
-                    }
-                }
-                fileUrls = normalizeFileUrls(urls);
-            }
-        }
-
-        if (fileUrls.isEmpty()) {
-            String singleFileUrl = getStringValue(map.get("fileUrl"));
-            if (singleFileUrl != null && !singleFileUrl.trim().isEmpty()) {
-                fileUrls.add(singleFileUrl.trim());
-            }
-        }
-
-        List<String> previewUrls = new ArrayList<>();
-
-        if (fullNotice != null) {
-            previewUrls = normalizeFileUrls(fullNotice.getPreviewUrls());
-        }
+        List<String> fileUrls = getExistingFileUrls(notice);
+        List<String> previewUrls = normalizeFileUrls(notice.getPreviewUrls());
 
         if (previewUrls.isEmpty()) {
             previewUrls = new ArrayList<>(fileUrls);
@@ -948,7 +1072,6 @@ public class NoticeController {
         map.put("fileUrls", fileUrls);
         map.put("previewUrls", previewUrls);
 
-        String noticeDepartmentId = getStringValue(map.get("departmentId"));
         boolean canModify = admin || sameDepartment(currentDepartmentId, noticeDepartmentId);
 
         map.put("canEdit", canModify);
@@ -1164,21 +1287,62 @@ public class NoticeController {
         return user != null && user.getId() != null ? user.getId().trim() : "";
     }
 
+    /**
+     * Normalize approve permissions from checkbox UI.
+     *
+     * FE/DB values accepted:
+     * - NONE
+     * - NOTICE
+     * - DOCUMENT
+     * - NOTICE,DOCUMENT
+     *
+     * Backward compatibility:
+     * - BOTH and ALL are treated as NOTICE,DOCUMENT.
+     */
     private String normalizeApprovePermission(String value) {
         if (value == null || value.trim().isEmpty()) {
             return "NONE";
         }
 
-        String permission = value.trim().toUpperCase();
+        String normalized = value.trim().toUpperCase();
+        Set<String> permissions = new LinkedHashSet<>();
 
-        if ("NOTICE".equals(permission)
-                || "DOCUMENT".equals(permission)
-                || "BOTH".equals(permission)
-                || "NONE".equals(permission)) {
-            return permission;
+        for (String item : normalized.split(",")) {
+            String cleanItem = item.trim();
+
+            if ("BOTH".equals(cleanItem) || "ALL".equals(cleanItem)) {
+                permissions.add("NOTICE");
+                permissions.add("DOCUMENT");
+            } else if ("NOTICE".equals(cleanItem) || "DOCUMENT".equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
         }
 
-        return "NONE";
+        if (permissions.isEmpty()) {
+            return "NONE";
+        }
+
+        return String.join(",", permissions);
+    }
+
+    private List<String> toApprovePermissionList(String value) {
+        String normalized = normalizeApprovePermission(value);
+
+        if ("NONE".equals(normalized)) {
+            return List.of("NONE");
+        }
+
+        return Arrays.asList(normalized.split(","));
+    }
+
+    private boolean hasApprovePermission(String permissionValue, String target) {
+        String normalized = normalizeApprovePermission(permissionValue);
+
+        if ("NONE".equals(normalized)) {
+            return false;
+        }
+
+        return Arrays.asList(normalized.split(",")).contains(target);
     }
 
     private boolean canApproveNoticeByPermission(User user) {
@@ -1186,9 +1350,9 @@ public class NoticeController {
             return false;
         }
 
-        String permission = normalizeApprovePermission(user.getApprovePermission());
-
-        return "NOTICE".equals(permission) || "BOTH".equals(permission);
+        // Notice approval is controlled by approvePermission only.
+        // Role Admin alone does not bypass this check.
+        return hasApprovePermission(user.getApprovePermission(), "NOTICE");
     }
 
     private User getUserOrNull(String userId) {
