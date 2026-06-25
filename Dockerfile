@@ -22,6 +22,15 @@ FROM eclipse-temurin:17-jre
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y \
+    libreoffice \
+    fontconfig \
+    fonts-dejavu \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV LIBREOFFICE_PATH=/usr/bin/soffice
+
 COPY --from=build /app/build/libs/*.jar app.jar
 
 EXPOSE 8081

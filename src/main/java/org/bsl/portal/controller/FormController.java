@@ -19,6 +19,8 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -37,10 +39,13 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/forms")
@@ -845,29 +850,28 @@ class FormController {
     @PatchMapping("/{id}/approve")
     public ResponseEntity<?> approve(
             @PathVariable String id,
-            @RequestParam String userId) {
+            @RequestParam(required = false) String userId) {
 
         try {
-            Optional<User> userOpt = userService.findById(userId.trim());
-
-            if (userOpt.isEmpty()) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
-            }
-
-            User user = userOpt.get();
-
-            if (!canApproveDocument(user)) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("message", "You do not have Document approval permission"));
-            }
-
             FormItem existing = service.getById(id);
 
             if (existing == null) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("message", "Form not found"));
             }
+
+            User adminUser = getAuthenticatedUserOrNull();
+
+            if (adminUser == null) {
+                return unauthorizedFormRequest();
+            }
+
+            if (!canApproveDocument(adminUser)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "You do not have Document approval permission"));
+            }
+
+            userId = getAuthenticatedUserId(adminUser);
 
             LocalDateTime now = LocalDateTime.now();
 
@@ -895,30 +899,29 @@ class FormController {
     @PatchMapping("/{id}/reject")
     public ResponseEntity<?> reject(
             @PathVariable String id,
-            @RequestParam String userId,
+            @RequestParam(required = false) String userId,
             @RequestBody(required = false) Map<String, String> body) {
 
         try {
-            Optional<User> userOpt = userService.findById(userId.trim());
-
-            if (userOpt.isEmpty()) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
-            }
-
-            User user = userOpt.get();
-
-            if (!canApproveDocument(user)) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("message", "You do not have Document approval permission"));
-            }
-
             FormItem existing = service.getById(id);
 
             if (existing == null) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("message", "Form not found"));
             }
+
+            User adminUser = getAuthenticatedUserOrNull();
+
+            if (adminUser == null) {
+                return unauthorizedFormRequest();
+            }
+
+            if (!canApproveDocument(adminUser)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "You do not have Document approval permission"));
+            }
+
+            userId = getAuthenticatedUserId(adminUser);
 
             String reason = body != null ? body.getOrDefault("reason", "") : "";
             LocalDateTime now = LocalDateTime.now();
@@ -947,30 +950,29 @@ class FormController {
     @PatchMapping("/{id}/status")
     public ResponseEntity<?> changeStatus(
             @PathVariable String id,
-            @RequestParam String userId,
+            @RequestParam(required = false) String userId,
             @RequestBody Map<String, String> body) {
 
         try {
-            Optional<User> userOpt = userService.findById(userId.trim());
-
-            if (userOpt.isEmpty()) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("message", "User with ID " + userId + " does not exist"));
-            }
-
-            User user = userOpt.get();
-
-            if (!canApproveDocument(user)) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("message", "You do not have Document approval permission"));
-            }
-
             FormItem existing = service.getById(id);
 
             if (existing == null) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("message", "Form not found"));
             }
+
+            User adminUser = getAuthenticatedUserOrNull();
+
+            if (adminUser == null) {
+                return unauthorizedFormRequest();
+            }
+
+            if (!canApproveDocument(adminUser)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("message", "You do not have Document approval permission"));
+            }
+
+            userId = getAuthenticatedUserId(adminUser);
 
             String nextStatus = normalizeApprovalStatus(body != null ? body.get("status") : null);
             String reason = body != null ? body.getOrDefault("reason", "") : "";
@@ -1059,27 +1061,97 @@ class FormController {
         return statusFilter.equals(itemStatus);
     }
 
+    private User getAuthenticatedUserOrNull() {
+        try {
+            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+            if (authentication == null || !authentication.isAuthenticated()) {
+                return null;
+            }
+
+            Object principal = authentication.getPrincipal();
+
+            if (principal == null) {
+                return null;
+            }
+
+            String email = String.valueOf(principal).trim();
+
+            if (email.isEmpty() || "anonymousUser".equalsIgnoreCase(email)) {
+                return null;
+            }
+
+            return userService.findByEmail(email).orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private ResponseEntity<?> unauthorizedFormRequest() {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("message", "Authentication is required. Please login again."));
+    }
+
+    private String getAuthenticatedUserId(User user) {
+        return user != null && user.getId() != null ? user.getId().trim() : "";
+    }
+
+    /**
+     * Normalize approve permissions from checkbox UI.
+     *
+     * FE/DB values accepted:
+     * - NONE
+     * - NOTICE
+     * - DOCUMENT
+     * - NOTICE,DOCUMENT
+     *
+     * Backward compatibility:
+     * - BOTH and ALL are treated as NOTICE,DOCUMENT.
+     */
     private String normalizeApprovePermission(String value) {
         if (value == null || value.trim().isEmpty()) {
             return APPROVE_NONE;
         }
 
-        String permission = value.trim().toUpperCase();
+        String normalized = value.trim().toUpperCase();
+        Set<String> permissions = new LinkedHashSet<>();
 
-        if (APPROVE_NOTICE.equals(permission)
-                || APPROVE_DOCUMENT.equals(permission)
-                || APPROVE_BOTH.equals(permission)
-                || APPROVE_NONE.equals(permission)) {
-            return permission;
+        for (String item : normalized.split(",")) {
+            String cleanItem = item.trim();
+
+            if (APPROVE_BOTH.equals(cleanItem) || "ALL".equals(cleanItem)) {
+                permissions.add(APPROVE_NOTICE);
+                permissions.add(APPROVE_DOCUMENT);
+            } else if (APPROVE_NOTICE.equals(cleanItem) || APPROVE_DOCUMENT.equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
         }
 
-        return APPROVE_NONE;
+        if (permissions.isEmpty()) {
+            return APPROVE_NONE;
+        }
+
+        return String.join(",", permissions);
+    }
+
+    private boolean hasApprovePermission(String permissionValue, String target) {
+        String normalized = normalizeApprovePermission(permissionValue);
+
+        if (APPROVE_NONE.equals(normalized)) {
+            return false;
+        }
+
+        return Arrays.asList(normalized.split(",")).contains(target);
     }
 
     private boolean canApproveDocument(User user) {
-        String permission = normalizeApprovePermission(user != null ? user.getApprovePermission() : null);
+        if (user == null) {
+            return false;
+        }
 
-        return APPROVE_DOCUMENT.equals(permission) || APPROVE_BOTH.equals(permission);
+        // Document approval is controlled by approvePermission only.
+        // Role Admin alone does not bypass this check.
+        return hasApprovePermission(user.getApprovePermission(), APPROVE_DOCUMENT);
     }
 
     private boolean sameDepartment(String currentDepartmentId, String itemDepartmentId) {
