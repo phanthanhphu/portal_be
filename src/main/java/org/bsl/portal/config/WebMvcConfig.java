@@ -1,6 +1,8 @@
 package org.bsl.portal.config;
 
+import org.bsl.portal.handler.ReadOnlyRoleInterceptor;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -9,6 +11,18 @@ import java.nio.file.Paths;
 
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
+
+    private final ReadOnlyRoleInterceptor readOnlyRoleInterceptor;
+
+    public WebMvcConfig(ReadOnlyRoleInterceptor readOnlyRoleInterceptor) {
+        this.readOnlyRoleInterceptor = readOnlyRoleInterceptor;
+    }
+
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(readOnlyRoleInterceptor)
+                .addPathPatterns("/api/**");
+    }
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {

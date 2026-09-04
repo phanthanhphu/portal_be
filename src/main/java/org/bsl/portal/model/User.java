@@ -15,6 +15,7 @@ public class User {
     private static final String PERMISSION_NONE = "NONE";
     private static final String PERMISSION_NOTICE = "NOTICE";
     private static final String PERMISSION_DOCUMENT = "DOCUMENT";
+    private static final String PERMISSION_APP_LINK = "APP_LINK";
     private static final String PERMISSION_BOTH_ALIAS = "BOTH";
 
     @Id
@@ -58,9 +59,10 @@ public class User {
      * - NONE
      * - NOTICE
      * - DOCUMENT
-     * - NOTICE,DOCUMENT
+     * - APP_LINK
+     * - NOTICE,DOCUMENT,APP_LINK
      *
-     * Admin role automatically has all menus.
+     * Admin role automatically has all menus. View role is enforced as read-only by the service/interceptor.
      */
     private String modulePermission = PERMISSION_NONE;
 
@@ -88,6 +90,52 @@ public class User {
         }
 
         return String.join(",", permissions);
+    }
+
+    private String normalizeModulePermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        Set<String> permissions = new LinkedHashSet<>();
+
+        for (String item : value.trim().toUpperCase().split(",")) {
+            String cleanItem = item.trim();
+
+            if ("ALL".equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+                permissions.add(PERMISSION_APP_LINK);
+            } else if (PERMISSION_BOTH_ALIAS.equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+            } else if (PERMISSION_NOTICE.equals(cleanItem)
+                    || PERMISSION_DOCUMENT.equals(cleanItem)
+                    || PERMISSION_APP_LINK.equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
+        }
+
+        return permissions.isEmpty() ? PERMISSION_NONE : String.join(",", permissions);
+    }
+
+    private List<String> toModulePermissionList(String value) {
+        String normalized = normalizeModulePermission(value);
+        List<String> result = new ArrayList<>();
+
+        if (PERMISSION_NONE.equals(normalized)) {
+            result.add(PERMISSION_NONE);
+            return result;
+        }
+
+        result.addAll(Arrays.asList(normalized.split(",")));
+        return result;
+    }
+
+    private boolean hasModulePermission(String permissionValue, String target) {
+        String normalized = normalizeModulePermission(permissionValue);
+        return !PERMISSION_NONE.equals(normalized)
+                && Arrays.asList(normalized.split(",")).contains(target);
     }
 
     private String normalizeBookingPermission(String value) {
@@ -139,7 +187,7 @@ public class User {
             return true;
         }
 
-        return toPermissionList(this.modulePermission).contains(target);
+        return hasModulePermission(this.modulePermission, target);
     }
 
     public boolean canApproveNotice() {
@@ -165,6 +213,10 @@ public class User {
 
     public boolean canManageDocument() {
         return hasModulePermission(PERMISSION_DOCUMENT);
+    }
+
+    public boolean canManageAppLinks() {
+        return hasModulePermission(PERMISSION_APP_LINK);
     }
 
     public boolean canManageDepartment() {
@@ -298,15 +350,15 @@ public class User {
     }
 
     public String getModulePermission() {
-        return normalizeNoticeDocumentPermission(modulePermission);
+        return normalizeModulePermission(modulePermission);
     }
 
     public void setModulePermission(String modulePermission) {
-        this.modulePermission = normalizeNoticeDocumentPermission(modulePermission);
+        this.modulePermission = normalizeModulePermission(modulePermission);
     }
 
     public List<String> getModulePermissions() {
-        return toPermissionList(this.modulePermission);
+        return toModulePermissionList(this.modulePermission);
     }
 
     public void setModulePermissions(List<String> modulePermissions) {
@@ -315,6 +367,6 @@ public class User {
             return;
         }
 
-        this.modulePermission = normalizeNoticeDocumentPermission(String.join(",", modulePermissions));
+        this.modulePermission = normalizeModulePermission(String.join(",", modulePermissions));
     }
 }

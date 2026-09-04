@@ -12,6 +12,7 @@ public class UserDTO {
     private static final String PERMISSION_NONE = "NONE";
     private static final String PERMISSION_NOTICE = "NOTICE";
     private static final String PERMISSION_DOCUMENT = "DOCUMENT";
+    private static final String PERMISSION_APP_LINK = "APP_LINK";
 
     private String id;
     private String username;
@@ -37,6 +38,7 @@ public class UserDTO {
 
     private String modulePermission = PERMISSION_NONE;
     private List<String> modulePermissions = new ArrayList<>();
+    private boolean canManageAppLinks;
     private boolean canManageNotice;
     private boolean canManageDocument;
     private boolean canManageDepartment;
@@ -204,21 +206,33 @@ public class UserDTO {
     }
 
     public String getModulePermission() {
-        return normalizeNoticeDocumentPermission(modulePermission);
+        return normalizeModulePermission(modulePermission);
     }
 
     public void setModulePermission(String modulePermission) {
-        this.modulePermission = normalizeNoticeDocumentPermission(modulePermission);
-        this.modulePermissions = toPermissionList(this.modulePermission);
+        this.modulePermission = normalizeModulePermission(modulePermission);
+        this.modulePermissions = toModulePermissionList(this.modulePermission);
     }
 
     public List<String> getModulePermissions() {
-        return toPermissionList(this.modulePermission);
+        return toModulePermissionList(this.modulePermission);
     }
 
     public void setModulePermissions(List<String> modulePermissions) {
         this.modulePermissions = modulePermissions != null ? new ArrayList<>(modulePermissions) : new ArrayList<>();
-        this.modulePermission = normalizeNoticeDocumentPermissions(this.modulePermissions);
+        this.modulePermission = normalizeModulePermissions(this.modulePermissions);
+    }
+
+    public boolean isCanManageAppLinks() {
+        return canManageAppLinks;
+    }
+
+    public boolean getCanManageAppLinks() {
+        return canManageAppLinks;
+    }
+
+    public void setCanManageAppLinks(boolean canManageAppLinks) {
+        this.canManageAppLinks = canManageAppLinks;
     }
 
     public boolean isCanManageNotice() {
@@ -301,6 +315,58 @@ public class UserDTO {
 
     private List<String> toPermissionList(String value) {
         String normalized = normalizeNoticeDocumentPermission(value);
+        List<String> result = new ArrayList<>();
+
+        if (PERMISSION_NONE.equals(normalized)) {
+            result.add(PERMISSION_NONE);
+            return result;
+        }
+
+        result.addAll(Arrays.asList(normalized.split(",")));
+        return result;
+    }
+
+    private String normalizeModulePermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        Set<String> permissions = new LinkedHashSet<>();
+
+        for (String item : value.trim().toUpperCase().split(",")) {
+            String cleanItem = item.trim();
+
+            if ("ALL".equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+                permissions.add(PERMISSION_APP_LINK);
+            } else if ("BOTH".equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+            } else if (PERMISSION_NOTICE.equals(cleanItem)
+                    || PERMISSION_DOCUMENT.equals(cleanItem)
+                    || PERMISSION_APP_LINK.equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
+        }
+
+        return permissions.isEmpty() ? PERMISSION_NONE : String.join(",", permissions);
+    }
+
+    private String normalizeModulePermissions(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        return normalizeModulePermission(
+                values.stream()
+                        .filter(item -> item != null && !item.trim().isEmpty())
+                        .collect(Collectors.joining(","))
+        );
+    }
+
+    private List<String> toModulePermissionList(String value) {
+        String normalized = normalizeModulePermission(value);
         List<String> result = new ArrayList<>();
 
         if (PERMISSION_NONE.equals(normalized)) {

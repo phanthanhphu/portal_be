@@ -758,6 +758,7 @@ public class NoticeController {
 
         try {
             boolean admin = false;
+            boolean view = false;
             boolean canApproveNotice = false;
             String currentDepartmentId = null;
             String currentUserName = null;
@@ -774,16 +775,17 @@ public class NoticeController {
             if (user != null) {
                 userId = getAuthenticatedUserId(user);
                 admin = isAdmin(user);
+                view = isViewRole(user);
                 canApproveNotice = canApproveNoticeByPermission(user);
                 currentDepartmentId = user.getDepartmentId();
                 currentUserName = getUserDisplayName(user);
 
-                if (!STATUS_APPROVED.equals(normalizedStatusFilter) && !canApproveNotice) {
+                if (!STATUS_APPROVED.equals(normalizedStatusFilter) && !canApproveNotice && !view) {
                     return ResponseEntity.status(HttpStatus.FORBIDDEN)
                             .body(Map.of("message", "You do not have permission to view non-approved notices"));
                 }
 
-                if (!admin && !skipDepartmentFilter) {
+                if (!admin && !view && !skipDepartmentFilter) {
                     filterDepartmentId = currentDepartmentId;
 
                     if (filterDepartmentId == null || filterDepartmentId.trim().isEmpty()) {
@@ -827,6 +829,7 @@ public class NoticeController {
                     Map<String, Object> noticeMap = toNoticeResponseMap(
                             notice,
                             admin,
+                            view,
                             currentDepartmentId,
                             userNameCache,
                             departmentCache
@@ -867,6 +870,7 @@ public class NoticeController {
                 responseContent.add(toNoticeResponseMap(
                         notice,
                         admin,
+                        view,
                         currentDepartmentId,
                         userNameCache,
                         departmentCache
@@ -883,6 +887,7 @@ public class NoticeController {
             response.put("pinnedNoticeCount", pinnedNotices.size());
             response.put("content", responseContent);
             response.put("isAdmin", admin);
+            response.put("isView", view);
             response.put("currentDepartmentId", currentDepartmentId);
             response.put("currentUserName", currentUserName);
             response.put("requestUserName", currentUserName);
@@ -893,7 +898,7 @@ public class NoticeController {
             response.put("approvePermission", approvePermission);
             response.put("approvePermissions", toApprovePermissionList(approvePermission));
             response.put("canApproveNotice", canApproveNotice);
-            response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
+            response.put("disableDepartmentSearch", !admin && !view && !skipDepartmentFilter);
             response.put("totalElements", totalElements);
             response.put("totalPages", totalPages);
             response.put("number", safePage);
@@ -917,6 +922,7 @@ public class NoticeController {
 
         try {
             boolean admin = false;
+            boolean view = false;
             boolean canApproveNotice = false;
             String currentDepartmentId = null;
             String currentUserName = null;
@@ -930,16 +936,17 @@ public class NoticeController {
 
             userId = getAuthenticatedUserId(user);
             admin = isAdmin(user);
+            view = isViewRole(user);
             canApproveNotice = canApproveNoticeByPermission(user);
             currentDepartmentId = user.getDepartmentId();
             currentUserName = getUserDisplayName(user);
 
-            if (!canApproveNotice) {
+            if (!canApproveNotice && !view) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("message", "You do not have permission to view notice approval counts"));
             }
 
-            if (!admin && !skipDepartmentFilter) {
+            if (!admin && !view && !skipDepartmentFilter) {
                 filterDepartmentId = currentDepartmentId;
 
                 if (filterDepartmentId == null || filterDepartmentId.trim().isEmpty()) {
@@ -986,6 +993,7 @@ public class NoticeController {
             response.put("approved", approvedCount);
             response.put("rejected", rejectedCount);
             response.put("isAdmin", admin);
+            response.put("isView", view);
             response.put("currentDepartmentId", currentDepartmentId);
             response.put("currentUserName", currentUserName);
             response.put("requestUserName", currentUserName);
@@ -994,7 +1002,7 @@ public class NoticeController {
             response.put("approvePermission", approvePermission);
             response.put("approvePermissions", toApprovePermissionList(approvePermission));
             response.put("canApproveNotice", canApproveNotice);
-            response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
+            response.put("disableDepartmentSearch", !admin && !view && !skipDepartmentFilter);
 
             return ResponseEntity.ok(response);
         } catch (Exception e) {
@@ -1007,6 +1015,7 @@ public class NoticeController {
     private Map<String, Object> toNoticeResponseMap(
             Notice notice,
             boolean admin,
+            boolean readOnly,
             String currentDepartmentId,
             Map<String, String> userNameCache,
             Map<String, Department> departmentCache
@@ -1072,7 +1081,7 @@ public class NoticeController {
         map.put("fileUrls", fileUrls);
         map.put("previewUrls", previewUrls);
 
-        boolean canModify = admin || sameDepartment(currentDepartmentId, noticeDepartmentId);
+        boolean canModify = !readOnly && (admin || sameDepartment(currentDepartmentId, noticeDepartmentId));
 
         map.put("canEdit", canModify);
         map.put("canDelete", canModify);
@@ -1528,6 +1537,15 @@ public class NoticeController {
         String itemStatus = normalizeApprovalStatus(noticeMap.get("status"));
 
         return statusFilter.equals(itemStatus);
+    }
+
+    private boolean isViewRole(User user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
+
+        String role = user.getRole().trim();
+        return "VIEW".equalsIgnoreCase(role) || "ROLE_VIEW".equalsIgnoreCase(role);
     }
 
     private boolean isAdmin(User user) {

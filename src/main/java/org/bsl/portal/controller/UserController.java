@@ -11,13 +11,17 @@ import jakarta.validation.Valid;
 import org.bsl.portal.common.socket.AppSocketPublisher;
 import org.bsl.portal.dto.ChangePasswordDTO;
 import org.bsl.portal.dto.LoginDTO;
+import org.bsl.portal.dto.ResetPasswordDTO;
 import org.bsl.portal.dto.UserDTO;
+import org.bsl.portal.exception.LoginFailureException;
 import org.bsl.portal.model.Department;
 import org.bsl.portal.model.User;
 import org.bsl.portal.repository.UserRepository;
 import org.bsl.portal.request.UserRequest;
 import org.bsl.portal.security.JwtUtil;
+import org.bsl.portal.service.ActiveDirectoryService;
 import org.bsl.portal.service.DepartmentService;
+import org.bsl.portal.service.LoginAuthenticationService;
 import org.bsl.portal.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
@@ -60,6 +64,9 @@ public class UserController {
     private PasswordEncoder passwordEncoder;
 
     @Autowired
+    private LoginAuthenticationService loginAuthenticationService;
+
+    @Autowired
     private ObjectMapper objectMapper;
 
     @Autowired
@@ -78,6 +85,7 @@ public class UserController {
     public static final String PERMISSION_NONE = "NONE";
     public static final String PERMISSION_NOTICE = "NOTICE";
     public static final String PERMISSION_DOCUMENT = "DOCUMENT";
+    public static final String PERMISSION_APP_LINK = "APP_LINK";
     public static final String PERMISSION_BOTH_ALIAS = "BOTH";
 
     public static final String APPROVE_NONE = PERMISSION_NONE;
@@ -289,69 +297,73 @@ public class UserController {
 
     @PostMapping("/login")
     @Operation(
-            summary = "SWAGGER LOGIN = AUTO AUTHORIZE!",
-            description = "Email: `abc123123@gmail.com` Pass: `123456` → Execute = TẤT CẢ API 200 OK!"
+            summary = "Login with Domain or system account",
+            description = "Use loginType DOMAIN (default) or SYSTEM. Domain login authenticates with Active Directory, then loads role and permissions from this system database."
     )
     public ResponseEntity<Map<String, Object>> login(@RequestBody LoginDTO loginRequest,
                                                      HttpServletRequest request,
                                                      HttpSession session) {
+        String identifier = loginRequest != null ? loginRequest.resolveIdentifier() : "";
+
         try {
-            if (loginRequest.getEmail() == null || loginRequest.getEmail().trim().isEmpty()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(Map.of("message", "Email cannot be empty"));
-            }
-
-            if (loginRequest.getPassword() == null || loginRequest.getPassword().trim().isEmpty()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(Map.of("message", "Password cannot be empty"));
-            }
-
-            Optional<User> userOpt = userService.findByEmail(loginRequest.getEmail());
-            if (userOpt.isEmpty()) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body(Map.of("message", "User not found with email: " + loginRequest.getEmail()));
-            }
-
-            User user = userOpt.get();
-
-            if (!user.isEnabled()) {
-                logger.warn("Login blocked: Account disabled for user: {}", user.getEmail());
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("message", "Your account has been disabled. Please contact the administrator."));
-            }
-
-            // Nếu muốn bật lại check password thì mở đoạn dưới:
-            if (!passwordEncoder.matches(loginRequest.getPassword(), user.getPassword())) {
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                        .body(Map.of("message", "Invalid password"));
-            }
+            LoginAuthenticationService.LoginResult loginResult = loginAuthenticationService.authenticate(loginRequest);
+            User user = loginResult.getUser();
 
             long tokenVersion = user.getTokenVersion();
             String token = jwtUtil.generateToken(user.getEmail(), user.getRole(), tokenVersion);
 
             session.setAttribute("swaggerBearerToken", token);
             session.setAttribute("authenticatedSession", true);
+            session.setAttribute("authenticationType", loginResult.getLoginType().name());
             session.setMaxInactiveInterval(3600 * 24);
 
-            logger.info("LOGIN SUCCESS → User: {} | Token: {}...", user.getEmail(), token.substring(0, 20));
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("message", "Login successful - All APIs authorized!");
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("message", loginResult.getLoginType().name() + " login successful");
             response.put("token", token);
+            response.put("authenticationType", loginResult.getLoginType().name());
             response.put("user", buildUserResponse(user));
+
+            ActiveDirectoryService.DirectoryUser directoryUser = loginResult.getDirectoryUser();
+            if (directoryUser != null) {
+                Map<String, Object> domainUser = new LinkedHashMap<>();
+                domainUser.put("username", directoryUser.getUsername());
+                domainUser.put("userPrincipalName", directoryUser.getUserPrincipalName());
+                domainUser.put("email", directoryUser.getEmail());
+                domainUser.put("displayName", directoryUser.getDisplayName());
+                response.put("domainUser", domainUser);
+            }
+
             response.put("autoAuthorize", true);
             response.put("sessionActive", true);
             response.put("sessionTimeout", "24h");
-            response.put("nextStep", "Execute any API → 200 OK!");
 
-            logger.info("LOGIN COMPLETE → User: {} | Session ID: {}", user.getEmail(), session.getId());
+            logger.info(
+                    "Login successful: identifier={} authenticationType={} applicationUser={}",
+                    identifier,
+                    loginResult.getLoginType(),
+                    user.getEmail()
+            );
 
             return ResponseEntity.ok(response);
+        } catch (LoginFailureException ex) {
+            logger.warn(
+                    "Login rejected: identifier={} code={} message={}",
+                    identifier,
+                    ex.getCode(),
+                    ex.getMessage()
+            );
 
-        } catch (Exception e) {
-            logger.error("Login failed for {}: {}", loginRequest.getEmail(), e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("message", "Failed to login: " + e.getMessage()));
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("message", ex.getMessage());
+            response.put("code", ex.getCode());
+            return ResponseEntity.status(ex.getStatus()).body(response);
+        } catch (Exception ex) {
+            logger.error("Unexpected login error for identifier={}", identifier, ex);
+
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("message", "An unexpected error occurred while signing in. Please contact the administrator.");
+            response.put("code", "LOGIN_UNEXPECTED_ERROR");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }
 
@@ -364,6 +376,7 @@ public class UserController {
         try {
             session.removeAttribute("authenticatedSession");
             session.removeAttribute("swaggerBearerToken");
+            session.removeAttribute("authenticationType");
             session.invalidate();
 
             logger.info("LOGOUT SUCCESS - Session: {} cleared", session.getId());
@@ -426,16 +439,6 @@ public class UserController {
             logger.info("Received profileImage: {}",
                     request.getProfileImage() != null ? request.getProfileImage().getOriginalFilename() : "null");
 
-            if (request.getUsername() == null || request.getUsername().trim().isEmpty()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(Map.of("message", "Username cannot be empty"));
-            }
-
-            if (request.getEmail() == null || request.getEmail().trim().isEmpty()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(Map.of("message", "Email cannot be empty"));
-            }
-
             Optional<User> existingUserOpt = userService.findById(id);
             if (existingUserOpt.isEmpty()) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -444,7 +447,24 @@ public class UserController {
 
             User existingUser = existingUserOpt.get();
 
-            Optional<User> userWithEmail = userService.findByEmail(request.getEmail());
+            if (request.getUsername() == null || request.getUsername().trim().isEmpty()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("message", "Username cannot be empty"));
+            }
+
+            // Some older FE builds omit empty multipart fields. During update, keep the
+            // existing email instead of failing when the email field is not included.
+            String requestedEmail = request.getEmail() != null ? request.getEmail().trim() : "";
+            String effectiveEmail = !requestedEmail.isEmpty()
+                    ? requestedEmail
+                    : (existingUser.getEmail() != null ? existingUser.getEmail().trim() : "");
+
+            if (effectiveEmail.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("message", "Email cannot be empty"));
+            }
+
+            Optional<User> userWithEmail = userService.findByEmail(effectiveEmail);
             if (userWithEmail.isPresent() && !userWithEmail.get().getId().equals(id)) {
                 return ResponseEntity.status(HttpStatus.CONFLICT)
                         .body(Map.of("message", "Email is already used by another user"));
@@ -452,8 +472,8 @@ public class UserController {
 
             User user = new User();
             user.setId(id);
-            user.setUsername(request.getUsername());
-            user.setEmail(request.getEmail());
+            user.setUsername(request.getUsername().trim());
+            user.setEmail(effectiveEmail);
             user.setPassword(existingUser.getPassword());
             user.setAddress(request.getAddress());
             user.setPhone(request.getPhone());
@@ -567,6 +587,11 @@ public class UserController {
                         .body(Map.of("message", "New password and confirm password must match"));
             }
 
+            if (passwordEncoder.matches(passwordRequest.getNewPassword(), user.getPassword())) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("message", "New password must be different from current password"));
+            }
+
             incrementTokenVersionAndBlacklist(user);
             logger.info("Invalidated all existing tokens for user: {}", user.getEmail());
 
@@ -592,7 +617,7 @@ public class UserController {
     @PostMapping("/reset-password")
     @Operation(summary = "Reset user password", description = "Reset the password without requiring old password + AUTO LOGOUT all sessions")
     public ResponseEntity<Map<String, String>> resetPassword(
-            @Valid @RequestBody ChangePasswordDTO passwordRequest) {
+            @Valid @RequestBody ResetPasswordDTO passwordRequest) {
         try {
             if (passwordRequest.getEmail() == null || passwordRequest.getEmail().isEmpty()) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -624,6 +649,12 @@ public class UserController {
                         .body(Map.of("message", "New password and confirm password must match"));
             }
 
+            if (passwordEncoder.matches(passwordRequest.getNewPassword(), user.getPassword())) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of("message", "New password must be different from current password"));
+            }
+
+            incrementTokenVersionAndBlacklist(user);
             user.setPassword(passwordEncoder.encode(passwordRequest.getNewPassword()));
             userRepository.save(user);
 
@@ -805,7 +836,49 @@ public class UserController {
     }
 
     private String normalizeModulePermission(String value) {
-        return normalizeNoticeDocumentPermission(value);
+        if (value == null || value.trim().isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        Set<String> permissions = new LinkedHashSet<>();
+
+        for (String item : value.trim().toUpperCase().split(",")) {
+            String cleanItem = item.trim();
+
+            if ("ALL".equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+                permissions.add(PERMISSION_APP_LINK);
+            } else if (PERMISSION_BOTH_ALIAS.equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+            } else if (PERMISSION_NOTICE.equals(cleanItem)
+                    || PERMISSION_DOCUMENT.equals(cleanItem)
+                    || PERMISSION_APP_LINK.equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
+        }
+
+        return permissions.isEmpty() ? PERMISSION_NONE : String.join(",", permissions);
+    }
+
+    private List<String> toModulePermissionList(String value) {
+        String normalized = normalizeModulePermission(value);
+        List<String> result = new ArrayList<>();
+
+        if (PERMISSION_NONE.equals(normalized)) {
+            result.add(PERMISSION_NONE);
+            return result;
+        }
+
+        result.addAll(Arrays.asList(normalized.split(",")));
+        return result;
+    }
+
+    private boolean hasModulePermission(String permissionValue, String target) {
+        String normalized = normalizeModulePermission(permissionValue);
+        return !PERMISSION_NONE.equals(normalized)
+                && Arrays.asList(normalized.split(",")).contains(target);
     }
 
     private String normalizeNoticeDocumentPermission(String value) {
@@ -901,19 +974,36 @@ public class UserController {
                 || "ROLE_ADMIN".equalsIgnoreCase(role);
     }
 
+    private boolean isViewRole(User user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
+
+        String role = user.getRole().trim();
+        return "VIEW".equalsIgnoreCase(role) || "ROLE_VIEW".equalsIgnoreCase(role);
+    }
+
     private boolean canApproveNotice(User user) {
-        // Approval is controlled by approvePermission only.
-        // Role Admin alone does not grant approve permission.
+        if (isViewRole(user)) {
+            return false;
+        }
+
         return hasNoticeDocumentPermission(user != null ? user.getApprovePermission() : null, PERMISSION_NOTICE);
     }
 
     private boolean canApproveDocument(User user) {
-        // Approval is controlled by approvePermission only.
-        // Role Admin alone does not grant approve permission.
+        if (isViewRole(user)) {
+            return false;
+        }
+
         return hasNoticeDocumentPermission(user != null ? user.getApprovePermission() : null, PERMISSION_DOCUMENT);
     }
 
     private boolean canManageBooking(User user) {
+        if (isViewRole(user)) {
+            return false;
+        }
+
         if (isAdmin(user)) {
             return true;
         }
@@ -923,24 +1013,44 @@ public class UserController {
         return BOOKING_MANAGE.equals(permission);
     }
 
-    private boolean canManageNotice(User user) {
+    private boolean canManageAppLinks(User user) {
+        if (isViewRole(user)) {
+            return false;
+        }
+
         if (isAdmin(user)) {
             return true;
         }
 
-        return hasNoticeDocumentPermission(user != null ? user.getModulePermission() : null, PERMISSION_NOTICE);
+        return hasModulePermission(user != null ? user.getModulePermission() : null, PERMISSION_APP_LINK);
+    }
+
+    private boolean canManageNotice(User user) {
+        if (isViewRole(user)) {
+            return false;
+        }
+
+        if (isAdmin(user)) {
+            return true;
+        }
+
+        return hasModulePermission(user != null ? user.getModulePermission() : null, PERMISSION_NOTICE);
     }
 
     private boolean canManageDocument(User user) {
+        if (isViewRole(user)) {
+            return false;
+        }
+
         if (isAdmin(user)) {
             return true;
         }
 
-        return hasNoticeDocumentPermission(user != null ? user.getModulePermission() : null, PERMISSION_DOCUMENT);
+        return hasModulePermission(user != null ? user.getModulePermission() : null, PERMISSION_DOCUMENT);
     }
 
     private boolean canManageDepartment(User user) {
-        return isAdmin(user);
+        return !isViewRole(user) && isAdmin(user);
     }
 
     private Map<String, Object> buildUserResponse(User user) {
@@ -975,7 +1085,8 @@ public class UserController {
 
         String modulePermission = normalizeModulePermission(user.getModulePermission());
         data.put("modulePermission", modulePermission);
-        data.put("modulePermissions", toPermissionList(modulePermission));
+        data.put("modulePermissions", toModulePermissionList(modulePermission));
+        data.put("canManageAppLinks", canManageAppLinks(user));
         data.put("canManageNotice", canManageNotice(user));
         data.put("canManageDocument", canManageDocument(user));
         data.put("canManageDepartment", canManageDepartment(user));

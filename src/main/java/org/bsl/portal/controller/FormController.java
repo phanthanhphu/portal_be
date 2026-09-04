@@ -433,8 +433,9 @@ class FormController {
             @RequestParam(defaultValue = "20") int size
     ) {
         try {
-            User currentUser = null;
+            User currentUser = getAuthenticatedUserOrNull();
             boolean admin = false;
+            boolean view = false;
             String currentDepartmentId = null;
             String filterDepartmentId = null;
             String statusFilter = normalizeApprovalStatusFilter(status);
@@ -443,20 +444,25 @@ class FormController {
             int safePage = Math.max(page, 0);
             int safeSize = Math.max(size, 1);
 
-            if (userId != null && !userId.trim().isEmpty()) {
-                Optional<User> userOpt = userService.findById(userId.trim());
+            // Authorization is derived from the JWT/SecurityContext only.
+            // The legacy userId query parameter is never trusted for access control.
+            if (currentUser == null && !STATUS_APPROVED.equals(statusFilter)) {
+                statusFilter = STATUS_APPROVED;
+            }
 
-                if (userOpt.isEmpty()) {
-                    return ResponseEntity.badRequest()
-                            .body(Map.of("message", "User with ID " + userId + " does not exist"));
-                }
-
-                currentUser = userOpt.get();
+            if (currentUser != null) {
+                userId = getAuthenticatedUserId(currentUser);
                 admin = isAdmin(currentUser);
+                view = isViewRole(currentUser);
                 currentDepartmentId = currentUser.getDepartmentId();
                 canApproveDocument = canApproveDocument(currentUser);
 
-                if (!admin && !skipDepartmentFilter) {
+                if (!STATUS_APPROVED.equals(statusFilter) && !canApproveDocument && !view) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(Map.of("message", "You do not have permission to view non-approved documents"));
+                }
+
+                if (!admin && !view && !skipDepartmentFilter) {
                     if (currentDepartmentId == null || currentDepartmentId.trim().isEmpty()) {
                         return ResponseEntity.badRequest()
                                 .body(Map.of("message", "User does not belong to any department"));
@@ -500,7 +506,7 @@ class FormController {
                 lookupTotalPages = Math.max(lookupResult.getTotalPages(), 1);
 
                 for (FormResponse form : lookupResult.getContent()) {
-                    Map<String, Object> formMap = toFormResponseMap(form, admin, currentDepartmentId);
+                    Map<String, Object> formMap = toFormResponseMap(form, admin, view, currentDepartmentId);
 
                     if (matchesApprovalStatus(formMap, statusFilter)) {
                         filteredContent.add(formMap);
@@ -519,9 +525,10 @@ class FormController {
             Map<String, Object> response = new HashMap<>();
             response.put("content", pageContent);
             response.put("isAdmin", admin);
+            response.put("isView", view);
             response.put("currentDepartmentId", currentDepartmentId);
             response.put("skipDepartmentFilter", skipDepartmentFilter);
-            response.put("disableDepartmentSearch", !admin && !skipDepartmentFilter);
+            response.put("disableDepartmentSearch", !admin && !view && !skipDepartmentFilter);
             response.put("status", statusFilter);
             response.put("canApproveDocument", canApproveDocument);
             response.put("approvePermission", currentUser != null ? normalizeApprovePermission(currentUser.getApprovePermission()) : APPROVE_NONE);
@@ -579,6 +586,7 @@ class FormController {
     private Map<String, Object> toFormResponseMap(
             FormResponse form,
             boolean admin,
+            boolean readOnly,
             String currentDepartmentId
     ) {
         Map<String, Object> map = new HashMap<>();
@@ -586,7 +594,7 @@ class FormController {
         String formDepartmentId = form.getDepartmentId();
         String formTypeId = form.getTypeId();
         String formTypeName = getDocumentTypeDisplayName(formTypeId);
-        boolean canModify = admin || sameDepartment(currentDepartmentId, formDepartmentId);
+        boolean canModify = !readOnly && (admin || sameDepartment(currentDepartmentId, formDepartmentId));
 
         /*
          * IMPORTANT:
@@ -1160,6 +1168,15 @@ class FormController {
         }
 
         return currentDepartmentId.trim().equals(itemDepartmentId.trim());
+    }
+
+    private boolean isViewRole(User user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
+
+        String role = user.getRole().trim();
+        return "VIEW".equalsIgnoreCase(role) || "ROLE_VIEW".equalsIgnoreCase(role);
     }
 
     private boolean isAdmin(User user) {

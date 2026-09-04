@@ -13,6 +13,7 @@ public class UserRequest {
     public static final String PERMISSION_NONE = "NONE";
     public static final String PERMISSION_NOTICE = "NOTICE";
     public static final String PERMISSION_DOCUMENT = "DOCUMENT";
+    public static final String PERMISSION_APP_LINK = "APP_LINK";
 
     // Giữ lại alias cũ để dữ liệu/API cũ không bị lỗi
     public static final String APPROVE_NONE = PERMISSION_NONE;
@@ -26,6 +27,7 @@ public class UserRequest {
     public static final String MODULE_NONE = PERMISSION_NONE;
     public static final String MODULE_NOTICE = PERMISSION_NOTICE;
     public static final String MODULE_DOCUMENT = PERMISSION_DOCUMENT;
+    public static final String MODULE_APP_LINK = PERMISSION_APP_LINK;
 
     private String username;
     private String email;
@@ -59,13 +61,13 @@ public class UserRequest {
 
     /**
      * Checkbox permissions for menu/module actions.
-     * Chỉ cho phép 3 quyền theo yêu cầu: NONE, NOTICE, DOCUMENT.
+     * Cho phép: NONE, NOTICE, DOCUMENT, APP_LINK.
      * FE có thể gửi:
      * - modulePermission=NONE
      * - modulePermission=NOTICE,DOCUMENT
      * - modulePermissions=NOTICE&modulePermissions=DOCUMENT
      *
-     * Alias cũ ALL được đọc là NOTICE,DOCUMENT. DEPARTMENT cũ sẽ bị bỏ qua.
+     * Alias cũ ALL được đọc là NOTICE,DOCUMENT,APP_LINK. DEPARTMENT cũ sẽ bị bỏ qua.
      */
     private String modulePermission = PERMISSION_NONE;
     private List<String> modulePermissions = new ArrayList<>();
@@ -133,6 +135,64 @@ public class UserRequest {
         return Arrays.asList(normalized.split(",")).contains(target);
     }
 
+    private String normalizeModulePermission(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        Set<String> permissions = new LinkedHashSet<>();
+
+        for (String item : value.trim().toUpperCase().split(",")) {
+            String cleanItem = item.trim();
+
+            if ("ALL".equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+                permissions.add(PERMISSION_APP_LINK);
+            } else if (APPROVE_BOTH.equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+            } else if (PERMISSION_NOTICE.equals(cleanItem)
+                    || PERMISSION_DOCUMENT.equals(cleanItem)
+                    || PERMISSION_APP_LINK.equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
+        }
+
+        return permissions.isEmpty() ? PERMISSION_NONE : String.join(",", permissions);
+    }
+
+    private String normalizeModulePermissions(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return PERMISSION_NONE;
+        }
+
+        return normalizeModulePermission(
+                values.stream()
+                        .filter(item -> item != null && !item.trim().isEmpty())
+                        .collect(Collectors.joining(","))
+        );
+    }
+
+    private List<String> toModulePermissionList(String value) {
+        String normalized = normalizeModulePermission(value);
+        List<String> result = new ArrayList<>();
+
+        if (PERMISSION_NONE.equals(normalized)) {
+            result.add(PERMISSION_NONE);
+            return result;
+        }
+
+        result.addAll(Arrays.asList(normalized.split(",")));
+        return result;
+    }
+
+    private boolean hasModulePermission(String permissionValue, String target) {
+        String normalized = normalizeModulePermission(permissionValue);
+        return !PERMISSION_NONE.equals(normalized)
+                && Arrays.asList(normalized.split(",")).contains(target);
+    }
+
     private String normalizeBookingPermission(String value) {
         if (value == null || value.trim().isEmpty()) {
             return BOOKING_NONE;
@@ -160,11 +220,15 @@ public class UserRequest {
     }
 
     public boolean canManageNotice() {
-        return hasPermission(getModulePermission(), PERMISSION_NOTICE);
+        return hasModulePermission(getModulePermission(), PERMISSION_NOTICE);
     }
 
     public boolean canManageDocument() {
-        return hasPermission(getModulePermission(), PERMISSION_DOCUMENT);
+        return hasModulePermission(getModulePermission(), PERMISSION_DOCUMENT);
+    }
+
+    public boolean canManageAppLinks() {
+        return hasModulePermission(getModulePermission(), PERMISSION_APP_LINK);
     }
 
     public boolean canManageDepartment() {
@@ -268,24 +332,24 @@ public class UserRequest {
 
     public String getModulePermission() {
         if (modulePermissions != null && !modulePermissions.isEmpty()) {
-            return normalizeNoticeDocumentPermissions(modulePermissions);
+            return normalizeModulePermissions(modulePermissions);
         }
 
-        return normalizeNoticeDocumentPermission(modulePermission);
+        return normalizeModulePermission(modulePermission);
     }
 
     public void setModulePermission(String modulePermission) {
-        this.modulePermission = normalizeNoticeDocumentPermission(modulePermission);
-        this.modulePermissions = toPermissionList(this.modulePermission);
+        this.modulePermission = normalizeModulePermission(modulePermission);
+        this.modulePermissions = toModulePermissionList(this.modulePermission);
     }
 
     public List<String> getModulePermissions() {
-        return toPermissionList(getModulePermission());
+        return toModulePermissionList(getModulePermission());
     }
 
     public void setModulePermissions(List<String> modulePermissions) {
         this.modulePermissions = modulePermissions != null ? new ArrayList<>(modulePermissions) : new ArrayList<>();
-        this.modulePermission = normalizeNoticeDocumentPermissions(this.modulePermissions);
+        this.modulePermission = normalizeModulePermissions(this.modulePermissions);
     }
 
     public MultipartFile getProfileImage() {

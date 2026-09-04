@@ -28,6 +28,7 @@ public class UserService {
     private static final String PERMISSION_NONE = "NONE";
     private static final String PERMISSION_NOTICE = "NOTICE";
     private static final String PERMISSION_DOCUMENT = "DOCUMENT";
+    private static final String PERMISSION_APP_LINK = "APP_LINK";
     private static final String PERMISSION_BOTH_ALIAS = "BOTH";
 
     private static final String BOOKING_NONE = "NONE";
@@ -44,9 +45,15 @@ public class UserService {
             user.setCreatedAt(LocalDateTime.now());
         }
 
-        user.setApprovePermission(normalizeNoticeDocumentPermission(user.getApprovePermission()));
-        user.setBookingPermission(normalizeBookingPermission(user.getBookingPermission()));
-        user.setModulePermission(normalizeNoticeDocumentPermission(user.getModulePermission()));
+        if (isViewRole(user)) {
+            user.setApprovePermission(PERMISSION_NONE);
+            user.setBookingPermission(BOOKING_NONE);
+            user.setModulePermission(PERMISSION_NONE);
+        } else {
+            user.setApprovePermission(normalizeNoticeDocumentPermission(user.getApprovePermission()));
+            user.setBookingPermission(normalizeBookingPermission(user.getBookingPermission()));
+            user.setModulePermission(normalizeModulePermission(user.getModulePermission()));
+        }
 
         return userRepository.save(user);
     }
@@ -57,6 +64,22 @@ public class UserService {
 
     public Optional<User> findByEmail(String email) {
         return userRepository.findByEmail(email);
+    }
+
+    public Optional<User> findByEmailIgnoreCase(String email) {
+        if (!StringUtils.hasText(email)) {
+            return Optional.empty();
+        }
+
+        return userRepository.findByEmailIgnoreCase(email.trim());
+    }
+
+    public Optional<User> findByUsernameIgnoreCase(String username) {
+        if (!StringUtils.hasText(username)) {
+            return Optional.empty();
+        }
+
+        return userRepository.findByUsernameIgnoreCase(username.trim());
     }
 
     public void deleteUser(String id) {
@@ -82,9 +105,15 @@ public class UserService {
         existing.setTokenVersion(data.getTokenVersion() > 0 ? data.getTokenVersion() : existing.getTokenVersion());
         existing.setProfileImageUrl(data.getProfileImageUrl());
 
-        existing.setApprovePermission(normalizeNoticeDocumentPermission(data.getApprovePermission()));
-        existing.setBookingPermission(normalizeBookingPermission(data.getBookingPermission()));
-        existing.setModulePermission(normalizeNoticeDocumentPermission(data.getModulePermission()));
+        if (isViewRole(existing)) {
+            existing.setApprovePermission(PERMISSION_NONE);
+            existing.setBookingPermission(BOOKING_NONE);
+            existing.setModulePermission(PERMISSION_NONE);
+        } else {
+            existing.setApprovePermission(normalizeNoticeDocumentPermission(data.getApprovePermission()));
+            existing.setBookingPermission(normalizeBookingPermission(data.getBookingPermission()));
+            existing.setModulePermission(normalizeModulePermission(data.getModulePermission()));
+        }
 
         if (existing.getCreatedAt() == null) {
             existing.setCreatedAt(data.getCreatedAt() != null ? data.getCreatedAt() : LocalDateTime.now());
@@ -204,9 +233,10 @@ public class UserService {
         dto.setBookingPermission(normalizeBookingPermission(user.getBookingPermission()));
         dto.setCanManageBooking(canManageBooking(user));
 
-        String modulePermission = normalizeNoticeDocumentPermission(user.getModulePermission());
+        String modulePermission = normalizeModulePermission(user.getModulePermission());
         dto.setModulePermission(modulePermission);
-        dto.setModulePermissions(toPermissionList(modulePermission));
+        dto.setModulePermissions(toModulePermissionList(modulePermission));
+        dto.setCanManageAppLinks(canManageAppLinkModule(user));
         dto.setCanManageNotice(canManageNoticeModule(user));
         dto.setCanManageDocument(canManageDocumentModule(user));
         dto.setCanManageDepartment(canManageDepartmentModule(user));
@@ -265,6 +295,46 @@ public class UserService {
         }
 
         return String.join(",", permissions);
+    }
+
+    private String normalizeModulePermission(String value) {
+        if (!StringUtils.hasText(value)) {
+            return PERMISSION_NONE;
+        }
+
+        Set<String> permissions = new LinkedHashSet<>();
+
+        for (String item : value.trim().toUpperCase().split(",")) {
+            String cleanItem = item.trim();
+
+            if ("ALL".equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+                permissions.add(PERMISSION_APP_LINK);
+            } else if (PERMISSION_BOTH_ALIAS.equals(cleanItem)) {
+                permissions.add(PERMISSION_NOTICE);
+                permissions.add(PERMISSION_DOCUMENT);
+            } else if (PERMISSION_NOTICE.equals(cleanItem)
+                    || PERMISSION_DOCUMENT.equals(cleanItem)
+                    || PERMISSION_APP_LINK.equals(cleanItem)) {
+                permissions.add(cleanItem);
+            }
+        }
+
+        return permissions.isEmpty() ? PERMISSION_NONE : String.join(",", permissions);
+    }
+
+    private List<String> toModulePermissionList(String value) {
+        String normalized = normalizeModulePermission(value);
+        List<String> result = new ArrayList<>();
+
+        if (PERMISSION_NONE.equals(normalized)) {
+            result.add(PERMISSION_NONE);
+            return result;
+        }
+
+        result.addAll(Arrays.asList(normalized.split(",")));
+        return result;
     }
 
     private String normalizePermissionFilter(String value) {
@@ -345,6 +415,15 @@ public class UserService {
                 || "ROLE_ADMIN".equalsIgnoreCase(role);
     }
 
+    public boolean isViewRole(User user) {
+        if (user == null || user.getRole() == null) {
+            return false;
+        }
+
+        String role = user.getRole().trim();
+        return "VIEW".equalsIgnoreCase(role) || "ROLE_VIEW".equalsIgnoreCase(role);
+    }
+
     private boolean hasNoticeDocumentPermission(String permissionValue, String target) {
         String permission = normalizeNoticeDocumentPermission(permissionValue);
 
@@ -356,18 +435,26 @@ public class UserService {
     }
 
     private boolean canApproveNotice(User user) {
-        // Approval is controlled by approvePermission only.
-        // Role Admin alone does not grant approve permission.
+        if (isViewRole(user)) {
+            return false;
+        }
+
         return hasNoticeDocumentPermission(user != null ? user.getApprovePermission() : null, PERMISSION_NOTICE);
     }
 
     private boolean canApproveDocument(User user) {
-        // Approval is controlled by approvePermission only.
-        // Role Admin alone does not grant approve permission.
+        if (isViewRole(user)) {
+            return false;
+        }
+
         return hasNoticeDocumentPermission(user != null ? user.getApprovePermission() : null, PERMISSION_DOCUMENT);
     }
 
     public boolean canManageBooking(User user) {
+        if (isViewRole(user)) {
+            return false;
+        }
+
         if (isAdmin(user)) {
             return true;
         }
@@ -377,11 +464,21 @@ public class UserService {
     }
 
     private boolean hasModulePermission(User user, String target) {
+        if (isViewRole(user)) {
+            return false;
+        }
+
         if (isAdmin(user)) {
             return true;
         }
 
-        return hasNoticeDocumentPermission(user != null ? user.getModulePermission() : null, target);
+        String permission = normalizeModulePermission(user != null ? user.getModulePermission() : null);
+        return !PERMISSION_NONE.equals(permission)
+                && Arrays.asList(permission.split(",")).contains(target);
+    }
+
+    private boolean canManageAppLinkModule(User user) {
+        return hasModulePermission(user, PERMISSION_APP_LINK);
     }
 
     private boolean canManageNoticeModule(User user) {

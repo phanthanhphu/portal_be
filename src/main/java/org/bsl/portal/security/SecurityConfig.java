@@ -8,8 +8,6 @@ import org.springframework.security.config.annotation.authentication.configurati
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -144,15 +142,8 @@ public class SecurityConfig {
                 "http://localhost:3001",
                 "http://127.0.0.1:3001",
                 "http://127.0.0.1:8081",
-                "http://10.232.100.68:3001",
-                "http://10.232.100.68:8081",
-                "https://10.232.100.68:3001",
-                "https://10.232.100.68:8081",
-                "http://10.232.132.52:3001",
-                "http://10.232.132.52:8081",
-                "https://homepage.youngone.com.vn",
-                "https://homepage.youngone.com.vn:3001",
-                "https://homepage.youngone.com.vn:8081"
+                "http://10.232.132.31:3003",
+                "http://10.232.132.31:8083"
         ));
 
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
@@ -171,8 +162,4 @@ public class SecurityConfig {
         return config.getAuthenticationManager();
     }
 
-    @Bean
-    public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder(12);
-    }
 }
