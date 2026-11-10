@@ -39,6 +39,10 @@ public class Notice {
     // ghim thông báo
     private Boolean pinned;
 
+    // Independent positions in the approved Pinned (1..2) and Normal (1..N) lists.
+    private Integer pinnedOrder;
+    private Integer displayOrder;
+
     // user tạo notice
     @Indexed
     private String userId;
@@ -304,6 +308,11 @@ public class Notice {
         this.previewUrls = cleanUrls(previewUrls);
         syncSingleFileFromList();
     }
+
+    public Integer getPinnedOrder() { return pinnedOrder; }
+    public void setPinnedOrder(Integer pinnedOrder) { this.pinnedOrder = pinnedOrder; }
+    public Integer getDisplayOrder() { return displayOrder; }
+    public void setDisplayOrder(Integer displayOrder) { this.displayOrder = displayOrder; }
 
     public Boolean getPinned() {
         return pinned;

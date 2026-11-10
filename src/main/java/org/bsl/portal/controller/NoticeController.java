@@ -67,6 +67,7 @@ public class NoticeController {
             @RequestParam(required = false) String userId,
             @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) Boolean pinned,
+            @RequestParam(required = false) Integer pinnedOrder,
             @RequestParam(value = "files", required = false) List<MultipartFile> files,
             // Support FE cũ nếu đang gửi field name là "file"
             @RequestParam(value = "file", required = false) MultipartFile file) {
@@ -129,6 +130,11 @@ public class NoticeController {
             notice.setUserId(userId.trim());
             notice.setDepartmentId(effectiveDepartmentId.trim());
             notice.setPinned(pinned != null ? pinned : false);
+            if (Boolean.TRUE.equals(notice.getPinned()) && admin && pinnedOrder != null) {
+                if (pinnedOrder < 1 || pinnedOrder > 2) return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Pinned order must be 1 or 2"));
+                notice.setPinnedOrder(pinnedOrder);
+            }
             syncFileFields(notice, savedFileUrls);
 
             LocalDateTime now = LocalDateTime.now();
@@ -151,6 +157,7 @@ public class NoticeController {
             Notice created = noticeService.create(notice);
 
             appSocketPublisher.noticeChanged("CREATED", created.getId());
+            appSocketPublisher.noticeChanged("ORDER_CHANGED", created.getId());
 
             return ResponseEntity.ok(created);
 
@@ -170,6 +177,7 @@ public class NoticeController {
             @RequestParam(required = false) String userId,
             @RequestParam(required = false) String departmentId,
             @RequestParam(required = false) Boolean pinned,
+            @RequestParam(required = false) Integer pinnedOrder,
             /*
              * FE mới gửi danh sách file cũ CÒN GIỮ LẠI.
              * Ví dụ cũ có [file1, file2], user xóa file1
@@ -322,6 +330,11 @@ public class NoticeController {
             updateData.setUserId(existing.getUserId());
             updateData.setDepartmentId(effectiveDepartmentId.trim());
             updateData.setPinned(pinned != null ? pinned : Boolean.TRUE.equals(existing.getPinned()));
+            if (Boolean.TRUE.equals(updateData.getPinned()) && admin && pinnedOrder != null) {
+                if (pinnedOrder < 1 || pinnedOrder > 2) return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Pinned order must be 1 or 2"));
+                updateData.setPinnedOrder(pinnedOrder);
+            }
             syncFileFields(updateData, currentFileUrls);
 
             String nextStatus = normalizeApprovalStatus(existing.getStatus());
@@ -362,6 +375,7 @@ public class NoticeController {
             }
 
             appSocketPublisher.noticeChanged("PINNED_CHANGED", updated.getId());
+            appSocketPublisher.noticeChanged("ORDER_CHANGED", updated.getId());
 
             HttpHeaders headers = new HttpHeaders();
             headers.add("X-Auto-Unpinned-Notice-Ids", String.join(",", autoUnpinnedNoticeIds));
@@ -413,6 +427,7 @@ public class NoticeController {
             noticeService.delete(id);
 
             appSocketPublisher.noticeChanged("DELETED", id);
+            appSocketPublisher.noticeChanged("ORDER_CHANGED", id);
 
             return ResponseEntity.ok(Map.of("message", "Deleted successfully"));
 
@@ -446,6 +461,38 @@ public class NoticeController {
         Page<Notice> result = noticeService.getAllPaged(page, size);
 
         return ResponseEntity.ok(result);
+    }
+
+    // Reorder Notice (Admin only). The two lists have independent positions.
+    @PatchMapping("/{id}/display-order")
+    public ResponseEntity<?> changeDisplayOrder(
+            @PathVariable String id,
+            @RequestBody Map<String, Object> request) {
+        User user = getAuthenticatedUserOrNull();
+        if (user == null) return unauthorizedNoticeRequest();
+        if (!isAdmin(user)) return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("message", "Only Admin can change the display order"));
+        if (request == null || !(request.get("pinned") instanceof Boolean)) {
+            return ResponseEntity.badRequest().body(Map.of("message", "pinned is required"));
+        }
+        boolean targetPinned = Boolean.TRUE.equals(request.get("pinned"));
+        int targetOrder;
+        try {
+            targetOrder = Integer.parseInt(String.valueOf(request.get("order")));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("message", "A valid order number is required"));
+        }
+        try {
+            NoticeService.PinNoticeResult result = noticeService.changeDisplayOrder(id, targetPinned, targetOrder);
+            if (result == null) return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "Notice not found"));
+            appSocketPublisher.noticeChanged("ORDER_CHANGED", result.getNotice().getId());
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("X-Auto-Unpinned-Notice-Ids", String.join(",", result.getAutoUnpinnedNoticeIds()));
+            return ResponseEntity.ok().headers(headers).body(result.getNotice());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
     }
 
     // PIN NOTICE
@@ -565,6 +612,7 @@ public class NoticeController {
             }
 
             appSocketPublisher.noticeChanged("PINNED_CHANGED", updated.getId());
+            appSocketPublisher.noticeChanged("ORDER_CHANGED", updated.getId());
 
             HttpHeaders headers = new HttpHeaders();
             headers.add("X-Auto-Unpinned-Notice-Ids", String.join(",", autoUnpinnedNoticeIds));
@@ -621,6 +669,7 @@ public class NoticeController {
             Notice updated = noticeService.save(existing);
 
             appSocketPublisher.noticeChanged("REJECTED", updated.getId());
+            appSocketPublisher.noticeChanged("ORDER_CHANGED", updated.getId());
 
             return ResponseEntity.ok(updated);
 
@@ -731,6 +780,7 @@ public class NoticeController {
             }
 
             appSocketPublisher.noticeChanged("PINNED_CHANGED", updated.getId());
+            appSocketPublisher.noticeChanged("ORDER_CHANGED", updated.getId());
 
             HttpHeaders headers = new HttpHeaders();
             headers.add("X-Auto-Unpinned-Notice-Ids", String.join(",", autoUnpinnedNoticeIds));
@@ -795,8 +845,7 @@ public class NoticeController {
                 }
             }
 
-            Sort newestSort = Sort.by(Sort.Direction.DESC, "createdAt")
-                    .and(Sort.by(Sort.Direction.DESC, "updatedAt"));
+            Sort newestSort = noticeService.noticeDisplaySort();
 
             int safePage = Math.max(page, 0);
             int safeSize = Math.max(size, 1);
@@ -1030,6 +1079,8 @@ public class NoticeController {
         map.put("title", notice.getTitle());
         map.put("content", notice.getContent());
         map.put("pinned", Boolean.TRUE.equals(notice.getPinned()));
+        map.put("pinnedOrder", notice.getPinnedOrder());
+        map.put("displayOrder", notice.getDisplayOrder());
         map.put("userId", notice.getUserId());
         map.put("departmentId", notice.getDepartmentId());
         map.put("createdAt", notice.getCreatedAt());

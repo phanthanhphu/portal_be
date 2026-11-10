@@ -23,6 +23,8 @@ public class NoticeResponse {
     private List<String> previewUrls = new ArrayList<>();
 
     private Boolean pinned;
+    private Integer pinnedOrder;
+    private Integer displayOrder;
     private String userId;
     private String departmentId;
     private String departmentName;
@@ -169,6 +171,11 @@ public class NoticeResponse {
         this.previewUrls = cleanUrls(previewUrls);
         syncSingleFileFromList();
     }
+
+    public Integer getPinnedOrder() { return pinnedOrder; }
+    public void setPinnedOrder(Integer pinnedOrder) { this.pinnedOrder = pinnedOrder; }
+    public Integer getDisplayOrder() { return displayOrder; }
+    public void setDisplayOrder(Integer displayOrder) { this.displayOrder = displayOrder; }
 
     public Boolean getPinned() {
         return pinned;

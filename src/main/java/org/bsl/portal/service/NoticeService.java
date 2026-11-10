@@ -26,13 +26,15 @@ public class NoticeService {
     private static final String STATUS_APPROVED = "APPROVED";
     private static final String STATUS_REJECTED = "REJECTED";
     private static final String STATUS_ALL = "ALL";
-    private static final int MAX_PINNED_NOTICES = 2;
 
     @Autowired
     private NoticeRepository repository;
 
     @Autowired
     private MongoTemplate mongoTemplate;
+
+    @Autowired
+    private NoticeDisplayOrderService displayOrderService;
 
     @Autowired
     private DepartmentService departmentService;
@@ -58,7 +60,8 @@ public class NoticeService {
     }
 
     // CREATE
-    public Notice create(Notice notice) {
+    public synchronized Notice create(Notice notice) {
+        displayOrderService.ensureInitialized();
 
         LocalDateTime now = LocalDateTime.now();
 
@@ -74,6 +77,7 @@ public class NoticeService {
         }
 
         Notice created = repository.save(notice);
+        displayOrderService.reconcile(null, created, null, false);
 
         // Add notice id vào department.noticeIds sau khi MongoDB đã tạo id.
         departmentService.addNoticeToDepartment(
@@ -84,74 +88,44 @@ public class NoticeService {
         return created;
     }
 
-    // SAVE DIRECTLY
-    // Dùng cho approve/reject trong NoticeController.
-    public Notice save(Notice notice) {
-        if (notice == null) {
-            return null;
-        }
+    // Status/approval workflow and edit both pass through the same ordering logic.
+    public synchronized Notice save(Notice notice) {
+        return saveWithAutoUnpinIfApprovedPinned(notice).getNotice();
+    }
 
+    public synchronized PinNoticeResult saveWithAutoUnpinIfApprovedPinned(Notice notice) {
+        if (notice == null) return null;
+        displayOrderService.ensureInitialized();
+        Notice previous = notice.getId() == null ? null : repository.findById(notice.getId()).orElse(null);
+        // A controller may hold a pre-migration entity without the new rank fields.
+        // Preserve its database ranks when the caller only changes approval/status.
+        if (previous != null && java.util.Objects.equals(previous.getPinned(), notice.getPinned())) {
+            if (notice.getPinnedOrder() == null) notice.setPinnedOrder(previous.getPinnedOrder());
+            if (notice.getDisplayOrder() == null) notice.setDisplayOrder(previous.getDisplayOrder());
+        }
         LocalDateTime now = LocalDateTime.now();
-
-        if (notice.getCreatedAt() == null) {
-            notice.setCreatedAt(now);
-        }
-
+        if (notice.getCreatedAt() == null) notice.setCreatedAt(now);
         notice.setUpdatedAt(now);
-
-        if (!StringUtils.hasText(notice.getStatus())) {
-            notice.setStatus(STATUS_APPROVED);
-        } else {
-            notice.setStatus(normalizeApprovalStatus(notice.getStatus()));
-        }
-
+        notice.setStatus(normalizeApprovalStatus(notice.getStatus()));
         Notice saved = repository.save(notice);
-
-        // Đảm bảo dữ liệu cũ hoặc notice vừa save vẫn được gắn vào department.
         departmentService.addNoticeToDepartment(saved.getDepartmentId(), saved.getId());
-
-        return saved;
+        NoticeDisplayOrderService.Result result = displayOrderService.reconcile(
+                previous, saved, null, false);
+        return new PinNoticeResult(result.getNotice(), result.getDemotedIds());
     }
 
-    /**
-     * Save dùng cho approve/change status.
-     * Chỉ enforce tối đa 2 pinned khi notice sau khi save là APPROVED + pinned=true.
-     * Nếu pinned=false hoặc status chưa APPROVED thì không query danh sách pinned.
-     */
-    public PinNoticeResult saveWithAutoUnpinIfApprovedPinned(Notice notice) {
-        Notice saved = save(notice);
-
-        if (saved == null) {
-            return null;
-        }
-
-        List<String> autoUnpinnedNoticeIds = enforceMaxPinnedIfApprovedAndPinned(saved);
-
-        return new PinNoticeResult(saved, autoUnpinnedNoticeIds);
-    }
-
-    /**
-     * Update dùng cho màn edit.
-     * FE gửi pinned=false: chỉ update notice, KHÔNG query pinned.
-     * FE gửi pinned=true nhưng notice chưa APPROVED: chỉ update notice, KHÔNG query pinned.
-     * FE gửi pinned=true và notice APPROVED: query tối đa 2 pinned APPROVED hiện có,
-     * bỏ ghim cái cũ hơn, giữ 1 pinned cũ mới nhất + notice hiện tại.
-     */
-    public PinNoticeResult updateWithAutoUnpinIfApprovedPinned(String id, Notice data) {
-        Notice updated = update(id, data);
-
-        if (updated == null) {
-            return null;
-        }
-
-        List<String> autoUnpinnedNoticeIds = enforceMaxPinnedIfApprovedAndPinned(updated);
-
-        return new PinNoticeResult(updated, autoUnpinnedNoticeIds);
+    public synchronized PinNoticeResult updateWithAutoUnpinIfApprovedPinned(String id, Notice data) {
+        return updateReordered(id, data);
     }
 
     // UPDATE
-    public Notice update(String id, Notice data) {
+    public synchronized Notice update(String id, Notice data) {
+        PinNoticeResult result = updateReordered(id, data);
+        return result == null ? null : result.getNotice();
+    }
 
+    private synchronized PinNoticeResult updateReordered(String id, Notice data) {
+        displayOrderService.ensureInitialized();
         Optional<Notice> optional = repository.findById(id);
 
         if (optional.isEmpty()) {
@@ -159,6 +133,7 @@ public class NoticeService {
         }
 
         Notice notice = optional.get();
+        Notice previous = repository.findById(id).orElse(null);
         String oldDepartmentId = notice.getDepartmentId();
 
         notice.setTitle(data.getTitle());
@@ -182,6 +157,12 @@ public class NoticeService {
         }
 
         notice.setPinned(data.getPinned());
+        if (Boolean.TRUE.equals(data.getPinned())) {
+            // An order selected by Admin in the edit dialog takes priority.
+            if (data.getPinnedOrder() != null) notice.setPinnedOrder(data.getPinnedOrder());
+        } else {
+            notice.setPinnedOrder(null);
+        }
         notice.setUserId(data.getUserId());
         notice.setDepartmentId(data.getDepartmentId());
 
@@ -203,6 +184,12 @@ public class NoticeService {
         notice.setUpdatedAt(LocalDateTime.now());
 
         Notice updated = repository.save(notice);
+        Integer requestedPin = Boolean.TRUE.equals(updated.getPinned())
+                && (previous == null || !Boolean.TRUE.equals(previous.getPinned())
+                    || !java.util.Objects.equals(previous.getPinnedOrder(), updated.getPinnedOrder()))
+                ? updated.getPinnedOrder() : null;
+        NoticeDisplayOrderService.Result orderResult = displayOrderService.reconcile(
+                previous, updated, requestedPin, false);
 
         // Nếu đổi phòng ban: remove khỏi department cũ, add vào department mới.
         // Nếu không đổi phòng ban: vẫn đảm bảo id đã có trong department.noticeIds.
@@ -212,11 +199,12 @@ public class NoticeService {
                 updated.getId()
         );
 
-        return updated;
+        return new PinNoticeResult(orderResult.getNotice(), orderResult.getDemotedIds());
     }
 
     // DELETE
-    public void delete(String id) {
+    public synchronized void delete(String id) {
+        displayOrderService.ensureInitialized();
         Notice existing = repository.findById(id).orElse(null);
 
         if (existing == null) {
@@ -227,6 +215,7 @@ public class NoticeService {
         String noticeId = existing.getId();
 
         repository.deleteById(id);
+        displayOrderService.afterDelete();
 
         // Remove notice id khỏi department.noticeIds khi xóa notice.
         departmentService.removeNoticeFromDepartment(departmentId, noticeId);
@@ -234,19 +223,29 @@ public class NoticeService {
 
     // GET BY ID
     public Notice getById(String id) {
+        displayOrderService.ensureInitialized();
         return repository.findById(id).orElse(null);
     }
 
     // GET ALL PAGED
     public Page<Notice> getAllPaged(int page, int size) {
+        displayOrderService.ensureInitialized();
 
         Pageable pageable = PageRequest.of(
                 page,
                 size,
-                Sort.by(Sort.Direction.DESC, "pinned", "createdAt")
+                noticeDisplaySort()
         );
 
         return repository.findAll(pageable);
+    }
+
+    /** Persistent display order. Pinned: 1,2; then Normal: 1..N. */
+    public Sort noticeDisplaySort() {
+        return Sort.by(Sort.Direction.DESC, "pinned")
+                .and(Sort.by(Sort.Direction.ASC, "pinnedOrder"))
+                .and(Sort.by(Sort.Direction.ASC, "displayOrder"))
+                .and(Sort.by(Sort.Direction.DESC, "createdAt"));
     }
 
     // Search cũ: giữ lại để không làm lỗi code đang gọi hiện tại.
@@ -279,6 +278,7 @@ public class NoticeService {
             String status,
             Pageable pageable
     ) {
+        displayOrderService.ensureInitialized();
         Query query = buildSearchQuery(
                 departmentId,
                 division,
@@ -317,6 +317,7 @@ public class NoticeService {
             String status,
             Pageable pageable
     ) {
+        displayOrderService.ensureInitialized();
         Query query = buildSearchQuery(
                 departmentId,
                 division,
@@ -338,6 +339,7 @@ public class NoticeService {
             String status,
             Pageable pageable
     ) {
+        displayOrderService.ensureInitialized();
         Query query = buildSearchQuery(
                 departmentId,
                 division,
@@ -364,6 +366,7 @@ public class NoticeService {
             List<String> excludeNoticeIds,
             Pageable pageable
     ) {
+        displayOrderService.ensureInitialized();
         Query query = buildSearchQuery(
                 departmentId,
                 division,
@@ -389,6 +392,7 @@ public class NoticeService {
     }
 
     private Page<Notice> executeNoticeEntityPage(Query query, Pageable pageable) {
+        displayOrderService.ensureInitialized();
         if (query == null) {
             return Page.empty(pageable);
         }
@@ -411,6 +415,7 @@ public class NoticeService {
             String content,
             String status
     ) {
+        displayOrderService.ensureInitialized();
         Query query = buildSearchQuery(
                 departmentId,
                 division,
@@ -453,6 +458,7 @@ public class NoticeService {
             String content,
             String status
     ) {
+        displayOrderService.ensureInitialized();
         Query query = buildSearchQuery(
                 departmentId,
                 division,
@@ -467,10 +473,7 @@ public class NoticeService {
         }
 
         query.addCriteria(Criteria.where("pinned").is(true));
-        query.with(
-                Sort.by(Sort.Direction.DESC, "createdAt")
-                        .and(Sort.by(Sort.Direction.DESC, "updatedAt"))
-        );
+        query.with(noticeDisplaySort());
         query.limit(1);
 
         Notice notice = mongoTemplate.findOne(query, Notice.class);
@@ -510,6 +513,7 @@ public class NoticeService {
             String status,
             Pageable pageable
     ) {
+        displayOrderService.ensureInitialized();
         Query query = buildSearchQuery(
                 departmentId,
                 division,
@@ -656,6 +660,8 @@ public class NoticeService {
         response.setFileUrls(cleanUrls(notice.getFileUrls()));
         response.setPreviewUrls(cleanUrls(notice.getPreviewUrls()));
         response.setPinned(notice.getPinned());
+        response.setPinnedOrder(notice.getPinnedOrder());
+        response.setDisplayOrder(notice.getDisplayOrder());
         response.setUserId(notice.getUserId());
         response.setDepartmentId(notice.getDepartmentId());
         response.setCreatedAt(notice.getCreatedAt());
@@ -742,116 +748,48 @@ public class NoticeService {
         return result;
     }
 
-    // PIN / UNPIN
+    // Legacy pin endpoint: new pin goes to position #1 by default.
     public Notice pin(String id, Boolean pinned) {
         PinNoticeResult result = pinWithAutoUnpin(id, pinned);
-
         return result != null ? result.getNotice() : null;
     }
 
-    public PinNoticeResult pinWithAutoUnpin(String id, Boolean pinned) {
-
-        Notice notice = repository.findById(id).orElse(null);
-
-        if (notice == null) {
-            return null;
+    public synchronized PinNoticeResult pinWithAutoUnpin(String id, Boolean pinned) {
+        displayOrderService.ensureInitialized();
+        Notice previous = repository.findById(id).orElse(null);
+        if (previous == null) return null;
+        Notice current = repository.findById(id).orElse(null);
+        current.setPinned(Boolean.TRUE.equals(pinned));
+        if (Boolean.TRUE.equals(pinned) && !Boolean.TRUE.equals(previous.getPinned())) {
+            current.setPinnedOrder(1);
+        } else if (!Boolean.TRUE.equals(pinned)) {
+            current.setPinnedOrder(null);
         }
-
-        boolean pinRequested = Boolean.TRUE.equals(pinned);
-
-        /*
-         * Rule theo request FE:
-         * - pinned=false: chỉ update chính notice này, KHÔNG query danh sách pinned.
-         * - pinned=true nhưng notice chưa APPROVED: chỉ update chính notice này, KHÔNG query danh sách pinned.
-         * - pinned=true và notice APPROVED: mới query pinned APPROVED tối đa 2 dòng
-         *   để bỏ ghim cái cũ hơn, giữ 1 pinned cũ mới nhất + notice hiện tại.
-         */
-        notice.setPinned(pinRequested);
-        notice.setUpdatedAt(LocalDateTime.now());
-
-        if (!StringUtils.hasText(notice.getStatus())) {
-            notice.setStatus(STATUS_APPROVED);
-        } else {
-            notice.setStatus(normalizeApprovalStatus(notice.getStatus()));
-        }
-
-        Notice updated = repository.save(notice);
-
-        // Đảm bảo dữ liệu cũ cũng có noticeId trong department.noticeIds.
-        departmentService.addNoticeToDepartment(updated.getDepartmentId(), updated.getId());
-
-        List<String> autoUnpinnedNoticeIds = enforceMaxPinnedIfApprovedAndPinned(updated);
-
-        return new PinNoticeResult(updated, autoUnpinnedNoticeIds);
+        current.setUpdatedAt(LocalDateTime.now());
+        Notice saved = repository.save(current);
+        departmentService.addNoticeToDepartment(saved.getDepartmentId(), saved.getId());
+        NoticeDisplayOrderService.Result result = displayOrderService.reconcile(previous, saved, null, false);
+        return new PinNoticeResult(result.getNotice(), result.getDemotedIds());
     }
 
-    private List<String> enforceMaxPinnedIfApprovedAndPinned(Notice activeNotice) {
-        /*
-         * Chốt logic tốc độ:
-         * - Chỉ khi activeNotice pinned=true và status=APPROVED mới query danh sách pinned.
-         * - Nếu pinned=false / PENDING / REJECTED thì return ngay, không query MongoDB.
-         */
-        if (activeNotice == null
-                || !Boolean.TRUE.equals(activeNotice.getPinned())
-                || !STATUS_APPROVED.equals(normalizeApprovalStatus(activeNotice.getStatus()))) {
-            return new ArrayList<>();
+    /** Admin-only position adjustment, with automatic overflow to Normal #1. */
+    public synchronized PinNoticeResult changeDisplayOrder(String id, boolean pinned, int order) {
+        displayOrderService.ensureInitialized();
+        Notice previous = repository.findById(id).orElse(null);
+        if (previous == null) return null;
+        if (!"APPROVED".equalsIgnoreCase(previous.getStatus())) {
+            throw new IllegalArgumentException("Only approved notices can be ordered");
         }
-
-        return unpinOldestApprovedPinnedNoticesBeforeKeeping(activeNotice.getId());
-    }
-
-    private List<String> unpinOldestApprovedPinnedNoticesBeforeKeeping(String activePinnedNoticeId) {
-        /*
-         * Chỉ lấy tối đa 2 notice đang pinned=true + APPROVED, loại trừ notice hiện tại.
-         * Nếu đã có 2 notice pinned APPROVED khác thì bỏ cái cũ hơn trong 2 cái đó,
-         * giữ lại 1 cái mới nhất + notice hiện tại = tổng cộng 2 pinned mới nhất.
-         */
-        Query query = new Query();
-
-        Criteria pinnedCriteria = Criteria.where("pinned").is(true);
-        Criteria statusCriteria = buildStatusCriteria(STATUS_APPROVED);
-
-        if (statusCriteria != null) {
-            query.addCriteria(new Criteria().andOperator(pinnedCriteria, statusCriteria));
-        } else {
-            query.addCriteria(pinnedCriteria);
+        if (order < 1 || (pinned && order > 2)) {
+            throw new IllegalArgumentException("Pinned order must be 1 or 2; normal order must be positive");
         }
-
-        if (StringUtils.hasText(activePinnedNoticeId)) {
-            query.addCriteria(Criteria.where("_id").ne(activePinnedNoticeId.trim()));
-        }
-
-        query.with(
-                Sort.by(Sort.Direction.DESC, "createdAt")
-                        .and(Sort.by(Sort.Direction.DESC, "updatedAt"))
-        );
-        query.limit(MAX_PINNED_NOTICES);
-
-        List<Notice> currentlyPinned = mongoTemplate.find(query, Notice.class);
-
-        if (currentlyPinned.size() < MAX_PINNED_NOTICES) {
-            return new ArrayList<>();
-        }
-
-        Notice oldPinnedNotice = currentlyPinned.get(MAX_PINNED_NOTICES - 1);
-        oldPinnedNotice.setPinned(false);
-        oldPinnedNotice.setUpdatedAt(LocalDateTime.now());
-
-        if (!StringUtils.hasText(oldPinnedNotice.getStatus())) {
-            oldPinnedNotice.setStatus(STATUS_APPROVED);
-        } else {
-            oldPinnedNotice.setStatus(normalizeApprovalStatus(oldPinnedNotice.getStatus()));
-        }
-
-        Notice savedOldPinnedNotice = repository.save(oldPinnedNotice);
-
-        List<String> autoUnpinnedNoticeIds = new ArrayList<>();
-
-        if (savedOldPinnedNotice != null && StringUtils.hasText(savedOldPinnedNotice.getId())) {
-            autoUnpinnedNoticeIds.add(savedOldPinnedNotice.getId());
-        }
-
-        return autoUnpinnedNoticeIds;
+        Notice current = repository.findById(id).orElse(null);
+        current.setPinned(pinned);
+        current.setPinnedOrder(pinned ? order : null);
+        // Do not change updatedAt when only moving a notice.
+        Notice saved = repository.save(current);
+        NoticeDisplayOrderService.Result result = displayOrderService.reconcile(previous, saved, order, true);
+        return new PinNoticeResult(result.getNotice(), result.getDemotedIds());
     }
 
     public boolean existsByDepartmentId(String departmentId) {
