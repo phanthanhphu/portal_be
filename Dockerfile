@@ -1,3 +1,4 @@
+
 # ===== BUILD STAGE =====
 FROM gradle:8.7-jdk17 AS build
 
@@ -18,19 +19,26 @@ RUN ./gradlew bootJar -x test --no-daemon
 
 
 # ===== RUN STAGE =====
-FROM eclipse-temurin:17-jre
+# Ubuntu 24.04 LTS - Java 17
+FROM eclipse-temurin:17-jre-noble
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    libreoffice \
-    fontconfig \
-    fonts-dejavu \
-    fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
+# Install LibreOffice and required fonts
+RUN set -eux; \
+    apt-get -o Acquire::Retries=5 update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        --no-install-recommends \
+        libreoffice \
+        fontconfig \
+        fonts-dejavu \
+        fonts-liberation; \
+    rm -rf /var/lib/apt/lists/*
 
+# LibreOffice configuration
 ENV LIBREOFFICE_PATH=/usr/bin/soffice
 
+# Application
 COPY --from=build /app/build/libs/*.jar app.jar
 
 EXPOSE 8081
